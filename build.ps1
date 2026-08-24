@@ -65,6 +65,13 @@ $mcpVersionInfo = Join-Path $PSScriptRoot "build\pyinstaller-version-info-mcp.tx
 & $venvPython (Join-Path $PSScriptRoot "tools\write_pyinstaller_version_info.py") $mcpVersionInfo "ai-gauge-mcp"
 if ($LASTEXITCODE -ne 0) { Write-Error "Could not generate MCP helper version metadata." }
 
+# mcp pulls in httpx, whose optional CLI path reaches pygments, whose img
+# formatter imports Pillow — ~13 MB of image codecs in a stdio JSON-RPC server
+# that never renders anything. pygments is present because the build venv
+# installs .[dev] (pytest needs it), so it is not a declared runtime dependency
+# of anything the helper actually calls. A one-file payload is already
+# compressed, so it does not shrink again inside the release archive; dropping
+# these here is a straight ~8.6 MB off every platform's download.
 $mcpArgs = @(
     "-m", "PyInstaller",
     "--noconfirm",
@@ -74,6 +81,8 @@ $mcpArgs = @(
     "--noupx",
     "--name", "ai-gauge-mcp",
     "--version-file", $mcpVersionInfo,
+    "--exclude-module", "PIL",
+    "--exclude-module", "pygments",
     "--paths", "src",
     "pyinstaller_mcp_entry.py"
 )

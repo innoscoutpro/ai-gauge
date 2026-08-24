@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.7.6 - unreleased
+
+### Fixed
+
+- Fixed the download growing by roughly 36 MB in 0.7.5. The packaged `ai-gauge-mcp` helper bundled Pillow and pygments, reached through the MCP SDK's HTTP client, which a stdio JSON-RPC server never uses. Excluding them cuts the helper by about 30% (~8.6 MB off every platform's archive). The helper still carries its own copy of the Python runtime that the application folder already ships; sharing that is tracked separately.
+
 ## 0.7.5 - 2026-08-23
 
 ### Added
