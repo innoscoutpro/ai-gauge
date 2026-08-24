@@ -635,6 +635,32 @@ def test_error_snapshot_preserves_previous_metrics():
     assert [(m.label, m.percent_used) for m in merged.metrics] == [("Session", 42.0)]
 
 
+def test_mcp_cache_sync_is_inert_when_disabled(monkeypatch):
+    app = App.__new__(App)
+    app._config = Config(mcp_enabled=False)  # noqa: SLF001
+    app._snapshots = {}  # noqa: SLF001
+    calls = []
+    monkeypatch.setattr(app_module, "invalidate_usage_cache", lambda: calls.append("remove"))
+    monkeypatch.setattr(app_module, "write_usage_cache", lambda snapshots: calls.append("write"))
+
+    app._sync_usage_cache()  # noqa: SLF001
+
+    assert calls == ["remove"]
+
+
+def test_mcp_cache_sync_publishes_only_when_enabled(monkeypatch):
+    app = App.__new__(App)
+    app._config = Config(mcp_enabled=True)  # noqa: SLF001
+    app._snapshots = {}  # noqa: SLF001
+    calls = []
+    monkeypatch.setattr(app_module, "invalidate_usage_cache", lambda: calls.append("remove"))
+    monkeypatch.setattr(app_module, "write_usage_cache", lambda snapshots: calls.append(snapshots))
+
+    app._sync_usage_cache()  # noqa: SLF001
+
+    assert calls == [{}]
+
+
 def test_repeated_error_snapshot_keeps_stale_metrics():
     previous = UsageSnapshot(
         provider="claude",

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.7.5 - 2026-08-21
+
+### Added
+
+- Added an optional local stdio MCP server that exposes sanitized per-account usage, safe account recommendations, usage resources, and cooperative pause guards without exposing cookies, tokens, or provider responses. The integration is disabled by default and publishes no cache until enabled.
+- Added per-account MCP pause thresholds in Settings with explicit fixed-account binding for each MCP client profile.
+- Release archives now include the `ai-gauge-mcp` helper: inside the `ai-gauge` folder on Windows and Linux, and beside `ai-gauge.app` on macOS. macOS users must clear quarantine on the helper separately from the app bundle (`xattr -dr com.apple.quarantine ai-gauge-mcp`), otherwise Gatekeeper stops it silently when an MCP client launches it.
+
+### Fixed
+
+- Fixed MCP usage becoming stale or unavailable while AI Gauge was hidden in the system tray. Cache publication now uses unique temporary files and retries brief Windows sharing violations, allowing multiple MCP chats to read usage while background refreshes publish new snapshots.
+- Configured MCP guards now fail closed for stale, failed, malformed, or ineligible usage data, ignore OpenRouter model-share percentages, and never recommend an account that is already blocked.
+- Packaged MCP helpers now complete a real protocol handshake in CI and shut down cleanly after stdio clients disconnect.
+
 ## 0.7.4 - 2026-08-18
 
 ### Added

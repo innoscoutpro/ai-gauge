@@ -58,6 +58,48 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error "PyInstaller build failed. If dist\ai-gauge\ai-gauge.exe is locked, close the running app and try again."
 }
 
+# The helper is an unsigned console binary that MCP clients launch headlessly,
+# so a Defender/SmartScreen block is silent. Give it the same product/version
+# resource the GUI carries rather than shipping metadata-less bytes.
+$mcpVersionInfo = Join-Path $PSScriptRoot "build\pyinstaller-version-info-mcp.txt"
+& $venvPython (Join-Path $PSScriptRoot "tools\write_pyinstaller_version_info.py") $mcpVersionInfo "ai-gauge-mcp"
+if ($LASTEXITCODE -ne 0) { Write-Error "Could not generate MCP helper version metadata." }
+
+$mcpArgs = @(
+    "-m", "PyInstaller",
+    "--noconfirm",
+    "--clean",
+    "--console",
+    "--onefile",
+    "--noupx",
+    "--name", "ai-gauge-mcp",
+    "--version-file", $mcpVersionInfo,
+    "--paths", "src",
+    "pyinstaller_mcp_entry.py"
+)
+& $venvPython @mcpArgs
+if ($LASTEXITCODE -ne 0) { Write-Error "MCP helper build failed." }
+if (-not $OneFile) {
+    $mcpSource = Join-Path $PSScriptRoot "dist\ai-gauge-mcp.exe"
+    $mcpTarget = Join-Path $PSScriptRoot "dist\ai-gauge\ai-gauge-mcp.exe"
+    try {
+        Move-Item -LiteralPath $mcpSource -Destination $mcpTarget -Force -ErrorAction Stop
+    } catch {
+        Write-Error "Cannot place dist\ai-gauge\ai-gauge-mcp.exe. Close any MCP client using the helper, then build again. ($_)"
+    }
+}
+
+# release.yml smoke-tests and packages the helper at a fixed path. Fail here,
+# with the path named, rather than partway through a tag release.
+$expectedMcp = if ($OneFile) {
+    Join-Path $PSScriptRoot "dist\ai-gauge-mcp.exe"
+} else {
+    Join-Path $PSScriptRoot "dist\ai-gauge\ai-gauge-mcp.exe"
+}
+if (-not (Test-Path -LiteralPath $expectedMcp)) {
+    Write-Error "MCP helper missing at expected release path: $expectedMcp"
+}
+
 # --collect-all on the WebEngine modules also drags in Chromium's debug
 # resource packs, the DevTools front-end, and every Qt translation — ~140 MB
 # the app never loads. Strip them before the folder is archived (issue #7).
@@ -73,6 +115,8 @@ Write-Host ""
 Write-Host "Build complete." -ForegroundColor Green
 if ($OneFile) {
     Write-Host "Binary: dist\ai-gauge.exe"
+    Write-Host "MCP helper: dist\ai-gauge-mcp.exe"
 } else {
     Write-Host "Folder: dist\ai-gauge\  (run ai-gauge.exe inside)"
+    Write-Host "MCP helper: dist\ai-gauge\ai-gauge-mcp.exe"
 }

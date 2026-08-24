@@ -50,6 +50,7 @@ from .settings_dialog import SettingsDialog
 from .webview import runtime as webengine
 from .webview.cookies import clear_browser_session, hydrate_all_from_keyring
 from .widget import UsageWidget
+from .usage_cache import invalidate_usage_cache, write_usage_cache
 
 # Resolved when the user first opens a sign-in window rather than imported at
 # module scope: .webview.login_window pulls in QtWebEngine, and importing
@@ -334,7 +335,9 @@ class App(QObject):
         qt_app = QApplication.instance()
         if qt_app is not None:
             qt_app.aboutToQuit.connect(self._log_about_to_quit)
+            qt_app.aboutToQuit.connect(self._invalidate_usage_cache)
         atexit.register(self._log_atexit)
+        atexit.register(self._invalidate_usage_cache)
 
         self._heartbeat = QTimer(self)
         self._heartbeat.setInterval(_HEARTBEAT_INTERVAL_MS)
@@ -405,6 +408,21 @@ class App(QObject):
     def _log_atexit(self) -> None:
         self._log_lifecycle_event("python atexit")
 
+    def _invalidate_usage_cache(self) -> None:
+        try:
+            invalidate_usage_cache()
+        except OSError:
+            log.exception("failed to invalidate MCP usage cache")
+
+    def _sync_usage_cache(self) -> None:
+        if not getattr(self._config, "mcp_enabled", False):
+            self._invalidate_usage_cache()
+            return
+        try:
+            write_usage_cache(self._snapshots)
+        except (OSError, ValueError):
+            log.exception("failed to publish MCP usage cache")
+
     def _build_providers(self) -> None:
         # Tear down any existing providers (no shared state to clean up beyond refs)
         self._providers.clear()
@@ -446,6 +464,7 @@ class App(QObject):
             if tile_id not in desired_tiles:
                 self._widget.remove_tile(tile_id)
                 self._snapshots.pop(tile_id, None)
+        self._sync_usage_cache()
 
     def _restart_timer(self) -> None:
         self._timer.stop()
@@ -616,6 +635,8 @@ class App(QObject):
             self._snapshots.get(snapshot.provider),
         )
         self._snapshots[snapshot.provider] = snapshot
+        if getattr(self._config, "mcp_enabled", False):
+            self._sync_usage_cache()
         self._cycle_signatures[snapshot.provider] = _snapshot_signature(snapshot)
         self._inflight.discard(snapshot.provider)
         if snapshot.status == SnapshotStatus.ERROR:
@@ -944,6 +965,8 @@ class App(QObject):
             error="Sign-in cleared from AI Gauge.",
         )
         self._snapshots[provider] = snapshot
+        if getattr(self._config, "mcp_enabled", False):
+            self._sync_usage_cache()
         if provider in self._providers:
             self._widget.update_snapshot(snapshot, display_name)
         self._update_tray()

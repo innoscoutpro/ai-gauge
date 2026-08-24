@@ -121,6 +121,19 @@ jobs:
           chmod +x ./build.sh
           ${{ matrix.build_cmd }}
 
+      - name: Smoke test MCP helper (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe tools\smoke_test_mcp.py dist\ai-gauge\ai-gauge-mcp.exe
+
+      - name: Smoke test MCP helper (macOS)
+        if: matrix.os == 'macos-latest'
+        run: .venv/bin/python tools/smoke_test_mcp.py dist/ai-gauge-mcp
+
+      - name: Smoke test MCP helper (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: .venv/bin/python tools/smoke_test_mcp.py dist/ai-gauge/ai-gauge-mcp
+
       - name: Package (Windows zip + sha256)
         id: pack_win
         if: matrix.os == 'windows-latest'
@@ -145,7 +158,7 @@ jobs:
           sha="${archive}.sha256"
           # On mac, archive the .app bundle. On Linux, archive the dist folder.
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
-              tar -C dist -czf "$archive" ai-gauge.app
+              tar -C dist -czf "$archive" ai-gauge.app ai-gauge-mcp
           else
               tar -C dist -czf "$archive" ai-gauge
           fi

@@ -4,7 +4,7 @@ import json
 import re
 import uuid
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import keyring
 from pydantic import BaseModel, Field
@@ -167,6 +167,11 @@ class OpenCodeGoConfig(BaseModel):
     colors: ColorThresholds = Field(default_factory=ColorThresholds)
 
 
+MCP_PAUSE_MIN = 1
+MCP_PAUSE_MAX = 100
+McpPauseThreshold = Annotated[int, Field(ge=MCP_PAUSE_MIN, le=MCP_PAUSE_MAX)]
+
+
 class Config(BaseModel):
     active_refresh_interval_minutes: int = Field(default=5, ge=1, le=180)
     refresh_interval_minutes: int = Field(default=60, ge=1, le=180)
@@ -195,6 +200,10 @@ class Config(BaseModel):
     opencode_go: OpenCodeGoConfig = Field(default_factory=OpenCodeGoConfig)
     expanded_tiles: list[str] = Field(default_factory=list)
     collapsed_tiles: list[str] = Field(default_factory=list)
+    # Disabled by default so normal GUI usage publishes no MCP cache.
+    mcp_enabled: bool = False
+    # Account id -> percent used at which cooperating MCP clients should pause.
+    mcp_pause_policies: dict[str, McpPauseThreshold] = Field(default_factory=dict)
     window: WindowState = Field(default_factory=WindowState)
 
     @classmethod
@@ -295,6 +304,22 @@ class Config(BaseModel):
         copilot = data.get("copilot")
         if isinstance(copilot, dict) and copilot.get("monthly_quota") == 300:
             copilot["monthly_quota"] = 1500
+        # Config.load() falls back to a fresh Config on any validation error, so
+        # one bad threshold would silently discard every other saved setting.
+        # Drop unusable entries here instead: a missing pause policy fails
+        # closed at guard time, which is the safe direction.
+        policies = data.get("mcp_pause_policies")
+        if isinstance(policies, dict):
+            data["mcp_pause_policies"] = {
+                account_id: threshold
+                for account_id, threshold in policies.items()
+                if isinstance(account_id, str)
+                and isinstance(threshold, int)
+                and not isinstance(threshold, bool)
+                and MCP_PAUSE_MIN <= threshold <= MCP_PAUSE_MAX
+            }
+        elif policies is not None:
+            data["mcp_pause_policies"] = {}
 
     def save(self) -> None:
         path = config_path()

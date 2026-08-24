@@ -58,6 +58,32 @@ fi
 
 "$VENV_PY" "${PYINSTALLER_ARGS[@]}"
 
+"$VENV_PY" -m PyInstaller \
+    --noconfirm \
+    --clean \
+    --console \
+    --onefile \
+    --noupx \
+    --name ai-gauge-mcp \
+    --paths src \
+    pyinstaller_mcp_entry.py
+
+# macOS ships the helper beside the .app because there is no folder bundle to
+# put it in; every other layout nests it next to the GUI binary.
+if [ "$(uname -s)" != "Darwin" ] && [ "$ONEFILE" -eq 0 ]; then
+    mv dist/ai-gauge-mcp dist/ai-gauge/ai-gauge-mcp
+    EXPECTED_MCP="dist/ai-gauge/ai-gauge-mcp"
+else
+    EXPECTED_MCP="dist/ai-gauge-mcp"
+fi
+
+# release.yml smoke-tests and packages the helper at a fixed path. Fail here,
+# with the path named, rather than partway through a tag release.
+if [ ! -f "$EXPECTED_MCP" ]; then
+    echo "MCP helper missing at expected release path: $EXPECTED_MCP" >&2
+    exit 1
+fi
+
 # On macOS, mark the bundle as a menu-bar-only agent so it doesn't show a
 # Dock icon. Tradeoff: the floating-widget mode (off by default on Mac)
 # also won't appear in Cmd-Tab while LSUIElement is set.
@@ -113,12 +139,14 @@ case "$(uname -s)" in
         else
             echo "Bundle: dist/ai-gauge.app"
         fi
+        echo "MCP helper: dist/ai-gauge-mcp"
         ;;
     *)
         if [ "$ONEFILE" -eq 1 ]; then
             echo "Binary: dist/ai-gauge"
         else
             echo "Folder: dist/ai-gauge/  (run ./ai-gauge inside)"
+            echo "MCP helper: dist/ai-gauge/ai-gauge-mcp"
         fi
         ;;
 esac

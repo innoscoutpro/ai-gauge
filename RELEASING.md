@@ -12,10 +12,11 @@ downloadable files.
 For AI Gauge, the release page should include:
 
 - The source code snapshot that GitHub attaches automatically.
-- One build artifact per supported OS:
-  - Windows: zipped `dist/ai-gauge/` folder
-  - macOS: tar.gz of the `.app` bundle
-  - Linux: tar.gz of `dist/ai-gauge/`
+- One build artifact per supported OS, each containing the GUI plus the
+  `ai-gauge-mcp` helper:
+  - Windows: zipped `dist/ai-gauge/` folder (helper inside it)
+  - macOS: tar.gz of the `.app` bundle **and** `dist/ai-gauge-mcp` beside it
+  - Linux: tar.gz of `dist/ai-gauge/` (helper inside it)
 - SHA256 checksums for each downloadable artifact.
 - A short note that the app is unsigned unless code signing has been added.
 - Windows artifact SHA256 and Authenticode status for Defender triage.
@@ -79,10 +80,19 @@ need access to a machine of each OS you intend to ship for, since
 PyInstaller cross-compilation isn't supported.
 
 1. Run the same local pre-flight in step 1 above on each target OS.
-2. Package the build:
+2. Package the build. `build.ps1` / `build.sh` place `ai-gauge-mcp` inside
+   `dist/ai-gauge/` on Windows and Linux, but leave it at `dist/ai-gauge-mcp`
+   on macOS — so the macOS archive must name it explicitly or it ships
+   without the MCP helper:
    - Windows: zip the full `dist\ai-gauge\` folder.
-   - macOS: `tar -C dist -czf ai-gauge-<ver>-macos.tar.gz ai-gauge.app`
+   - macOS: `tar -C dist -czf ai-gauge-<ver>-macos.tar.gz ai-gauge.app ai-gauge-mcp`
    - Linux: `tar -C dist -czf ai-gauge-<ver>-linux.tar.gz ai-gauge`
+
+   Confirm the helper survived packaging before uploading:
+
+   ```bash
+   tar -tzf ai-gauge-<ver>-macos.tar.gz | grep ai-gauge-mcp
+   ```
 3. Create a checksum:
 
    ```powershell
@@ -115,6 +125,11 @@ Native UI per OS: floating widget on Windows / Linux, menu-bar item on macOS.
 - macOS: `ai-gauge-<ver>-macos.tar.gz` → drag `ai-gauge.app` to Applications.
   First launch needs `xattr -dr com.apple.quarantine ai-gauge.app` or right-click → Open.
 - Linux: `ai-gauge-<ver>-linux.tar.gz` → extract, run `./ai-gauge/ai-gauge`.
+
+Each archive also ships the optional `ai-gauge-mcp` usage-guard helper
+(alongside `ai-gauge.app` on macOS, inside the folder elsewhere). It is only
+needed by MCP clients — see the README. macOS users must clear quarantine on
+the helper separately: `xattr -dr com.apple.quarantine ai-gauge-mcp`.
 
 ### Verification
 

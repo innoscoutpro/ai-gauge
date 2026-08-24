@@ -14,7 +14,7 @@ Compact monitor for **Claude.ai**, **ChatGPT Codex**, **OpenCode**, **GitHub Cop
 
 > **Requires Python 3.11+.** Secrets live in the OS-native credential store (Windows Credential Manager / DPAPI, macOS Keychain, Linux Secret Service). Auto-start uses the platform's standard mechanism (Windows Task Scheduler / LaunchAgent / `~/.config/autostart`).
 
-Current version: **0.7.4**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current version: **0.7.5**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 AI Gauge is an independent open-source project and unofficial local desktop
 utility. It is not affiliated with Anthropic, OpenAI, GitHub, Microsoft,
@@ -66,7 +66,7 @@ SHA256 sums are published alongside each archive. Builds are unsigned - see the 
 
 ```powershell
 py -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .[dev]
+.\.venv\Scripts\python.exe -m pip install -e .
 .\.venv\Scripts\python.exe -m aigauge
 ```
 
@@ -74,7 +74,7 @@ py -m venv .venv
 
 ```bash
 python3 -m venv .venv
-./.venv/bin/python -m pip install -e '.[dev]'
+./.venv/bin/python -m pip install -e .
 ./.venv/bin/python -m aigauge
 ```
 
@@ -204,10 +204,68 @@ See [RELEASING.md](RELEASING.md) for maintainer release steps.
 
 ## Tests
 
+Tests need the dev extras, which the run-from-source install above omits:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e .[dev]     # Windows
+./.venv/bin/python -m pip install -e '.[dev]'           # macOS / Linux
+```
+
 ```powershell
 .\.venv\Scripts\python.exe -m pytest    # Windows
 ./.venv/bin/python -m pytest            # macOS / Linux
 ```
+
+## MCP usage guard
+
+AI Gauge includes a local stdio MCP server for tools and agents that want to
+inspect subscription usage before starting expensive work. The integration is
+disabled by default: open **Settings → MCP**, enable it, and configure an
+optional pause percentage for each account.
+
+Bind each MCP client/profile explicitly to the AI Gauge account it actually
+uses:
+
+```text
+ai-gauge-mcp --account-id codex-work
+```
+
+Source installations need the optional dependency first:
+
+```text
+pip install -e '.[mcp]'
+```
+
+Release archives include the helper next to the application: inside the
+`ai-gauge` folder on Windows/Linux and alongside `ai-gauge.app` on macOS.
+
+On macOS the helper is a separate unsigned binary outside the `.app`, so
+clearing quarantine on the bundle does not cover it. Gatekeeper kills it
+silently when an MCP client launches it — the client just reports a failed
+server. Clear it once after extracting:
+
+```bash
+xattr -dr com.apple.quarantine ai-gauge-mcp
+```
+
+Configure the client to call `check_current_account_usage` before costly work
+and stop whenever the returned `allowed` value is `false`. Other tools provide
+all sanitized usage and recommend the account with the most configured
+headroom.
+
+`--account-id` selects which account the *guard* applies to; it is not an
+access boundary. `get_ai_usage` and `recommend_ai_account` deliberately report
+every enabled account — that is what makes a recommendation possible — so a
+connected client sees all of their display names. Name accounts accordingly if
+that matters to you.
+
+MCP cannot forcibly suspend a client that ignores tool results. The pause
+policy is enforced cooperatively by clients that follow the guard instruction.
+The server reads only AI Gauge's sanitized local usage cache; credentials and
+raw provider responses are never published. Configured guards fail closed when
+usage is stale, unavailable, or from a failed refresh. Disabling the integration
+removes the cache and restores normal AI Gauge operation with no ongoing MCP
+cache publication or background work.
 
 Tests cover: config round-trip, provider payload parsing, Copilot and OpenRouter REST helpers (with mocked HTTP), widget behavior, and snapshot models. End-to-end browser scraping for Claude, Codex, and OpenCode requires a live signed-in session and is validated manually.
 

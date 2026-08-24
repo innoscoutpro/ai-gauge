@@ -24,16 +24,22 @@ def _string(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
-def render(version: str) -> str:
+TARGETS = {
+    "ai-gauge": "AloeDesk AI Gauge utility",
+    "ai-gauge-mcp": "AloeDesk AI Gauge MCP usage guard",
+}
+
+
+def render(version: str, name: str = "ai-gauge") -> str:
     version_tuple = _version_tuple(version)
     dotted = ".".join(str(part) for part in version_tuple)
     strings = {
         "CompanyName": "AloeDesk",
-        "FileDescription": "AloeDesk AI Gauge utility",
+        "FileDescription": TARGETS.get(name, TARGETS["ai-gauge"]),
         "FileVersion": dotted,
-        "InternalName": "ai-gauge",
+        "InternalName": name,
         "LegalCopyright": "Copyright (c) AloeDesk",
-        "OriginalFilename": "ai-gauge.exe",
+        "OriginalFilename": f"{name}.exe",
         "ProductName": "AI Gauge",
         "ProductVersion": version,
     }
@@ -69,12 +75,19 @@ VSVersionInfo(
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: python tools/write_pyinstaller_version_info.py <output>", file=sys.stderr)
+    if len(argv) not in (2, 3):
+        print(
+            "usage: python tools/write_pyinstaller_version_info.py <output> [name]",
+            file=sys.stderr,
+        )
         return 2
     output = Path(argv[1])
+    name = argv[2] if len(argv) == 3 else "ai-gauge"
+    if name not in TARGETS:
+        print(f"unknown target {name!r}; expected one of {sorted(TARGETS)}", file=sys.stderr)
+        return 2
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(render(_version()), encoding="utf-8")
+    output.write_text(render(_version(), name), encoding="utf-8")
     print(f"wrote {output}")
     return 0
 

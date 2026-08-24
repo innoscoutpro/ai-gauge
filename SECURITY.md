@@ -41,6 +41,24 @@ every OS. The default Claude, Codex, and OpenCode account IDs are `claude`,
 `codex`, and `opencode_go`; additional Claude/Codex accounts get their own
 generated IDs and profiles.
 
+### MCP usage cache
+
+The optional MCP integration (off by default) is the only feature that writes
+usage data outside the credential store, to `<app-data>/mcp-usage.json`.
+Nothing is written until a user enables it in **Settings → MCP**, and the file
+is deleted when the integration is disabled or AI Gauge exits.
+
+It holds only what the pause guard needs: account IDs, snapshot status and
+timestamp, and per-metric label, percentage, reset time, and guard eligibility.
+Credentials, cookies, raw provider responses, error text, and metric notes are
+excluded by construction — `tests/test_mcp_server.py` asserts a sentinel
+planted in those fields never reaches the file. The file is written via
+`tempfile.NamedTemporaryFile` and `os.replace`, so it inherits mode `0600`
+rather than the process umask.
+
+The `ai-gauge-mcp` helper only reads this file and the config; it never touches
+the credential store, and it exposes no network transport (stdio only).
+
 ### Why the split on Windows?
 
 Windows Credential Manager caps each blob at ~2.5 KB, which is fine for a

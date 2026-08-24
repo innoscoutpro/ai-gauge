@@ -1,6 +1,6 @@
 [project]
 name = "ai-gauge"
-version = "0.7.4"
+version = "0.7.5"
 description = "Compact always-on-top monitor for Claude.ai, ChatGPT Codex, and GitHub Copilot usage limits."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -37,7 +37,11 @@ Issues = "https://github.com/jpajak/ai-gauge/issues"
 Security = "https://github.com/jpajak/ai-gauge/security"
 
 [project.optional-dependencies]
+mcp = [
+    "mcp>=1.27,<2",
+]
 dev = [
+    "mcp>=1.27,<2",
     "pytest>=8.0",
     "pytest-qt>=4.4",
     "responses>=0.25",
@@ -46,6 +50,7 @@ dev = [
 
 [project.scripts]
 ai-gauge = "aigauge.__main__:main"
+ai-gauge-mcp = "aigauge.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]
