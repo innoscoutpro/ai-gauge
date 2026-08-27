@@ -49,7 +49,7 @@ from .config import (
     ColorThresholds,
     Config,
     SnapCorner,
-    WINDOW_COLLAPSED_HEIGHT,
+    WINDOW_COLLAPSED_MIN_HEIGHT,
     WINDOW_COLLAPSED_MIN_WIDTH,
     WINDOW_MAX_HEIGHT,
     WINDOW_MAX_WIDTH,
@@ -70,12 +70,19 @@ from .ratio import (
 )
 
 ROW_BAR_HEIGHT = 8
-MIN_GAUGE_WIDTH = 120
+# Narrowest a percentage gauge may be squeezed before the panel refuses to
+# shrink further. Short enough to let a dense panel be dragged genuinely
+# narrow, long enough for the fill and the pace tick to stay readable.
+MIN_GAUGE_WIDTH = 80
+# Floor for the metric-label column. Every tile pads its own labels to their
+# widest, so this floor is what keeps the bars starting at the same x across
+# providers whose labels differ.
+MIN_LABEL_WIDTH = 56
 PACE_TICK_OVERHANG = 2
 CHIP_NOTCH_HEIGHT = 4
 CHIP_NOTCH_HALF_WIDTH = 3.5
 PROVIDER_ORDER = ("claude", "codex", "opencode_go", "copilot", "openrouter")
-COLLAPSED_MIN_HEIGHT = WINDOW_COLLAPSED_HEIGHT
+COLLAPSED_MIN_HEIGHT = WINDOW_COLLAPSED_MIN_HEIGHT
 EXPANDED_MIN_WIDTH = WINDOW_MIN_WIDTH
 COLLAPSED_MIN_WIDTH = WINDOW_COLLAPSED_MIN_WIDTH
 # Window chrome. PANEL_BG doubles as the widget's palette Window brush so any
@@ -84,6 +91,11 @@ COLLAPSED_MIN_WIDTH = WINDOW_COLLAPSED_MIN_WIDTH
 PANEL_BG = "#111827"
 PANEL_BORDER = "#1f2937"
 PANEL_CORNER_RADIUS = 8
+# Footer row: tall enough for the 10px status text and the 14px resize grip.
+FOOTER_HEIGHT = 16
+# Pointer movement (device-independent pixels) still treated as a click on the
+# footer status rather than the start of a window drag.
+STATUS_CLICK_SLOP = 4
 # Distances are Qt device-independent pixels. Qt maps the pointer, window, and
 # available screen geometry into this same coordinate system, so these retain
 # the same apparent size at 100%, 150%, and 200% display scaling.
@@ -583,7 +595,7 @@ class _MetricRow(QWidget):
         self._colors = colors or ColorThresholds()
         self.label = QLabel()
         self.label.setStyleSheet("color: #d1d5db; font-size: 11px;")
-        self.label.setMinimumWidth(70)
+        self.label.setMinimumWidth(MIN_LABEL_WIDTH)
         self._resets_at: datetime | None = None
         self._window: timedelta | None = None
 
@@ -703,7 +715,7 @@ class _MetricRow(QWidget):
         window: timedelta | None = None,
     ) -> None:
         # Reset to flexible width; group alignment in _set_rows may pin it after.
-        self.label.setMinimumWidth(70)
+        self.label.setMinimumWidth(MIN_LABEL_WIDTH)
         self.label.setMaximumWidth(16777215)
         split_note = (
             percent is None
@@ -722,7 +734,7 @@ class _MetricRow(QWidget):
             self.label.setText(label)
             self.reset.setStyleSheet("color: #9ca3af; font-size: 10px;")
         label_width = self.label.fontMetrics().horizontalAdvance(self.label.text()) + 4
-        self.label.setMinimumWidth(max(70, label_width))
+        self.label.setMinimumWidth(max(MIN_LABEL_WIDTH, label_width))
         self.setToolTip(note or "")
         self._resets_at = resets_at
         self._window = window
@@ -795,7 +807,7 @@ class _MetricRow(QWidget):
         self.reset.setWordWrap(False)
         self.label.setText(label)
         label_width = self.label.fontMetrics().horizontalAdvance(label) + 4
-        self.label.setMinimumWidth(max(70, label_width))
+        self.label.setMinimumWidth(max(MIN_LABEL_WIDTH, label_width))
         self.setToolTip("")
         self._resets_at = None
         self._window = None
@@ -1065,20 +1077,28 @@ class _ProviderTile(QFrame):
             self._available_width - margins.left() - margins.right(),
         )
 
-    def minimum_inline_gauge_width(self) -> int:
-        """Width required to keep this provider's percentage gauges inline."""
-        gauge_width = max(
+    def minimum_inline_width(self) -> int:
+        """Width that keeps each of this provider's rows on one line.
+
+        Both row shapes count: a percentage gauge, and the label/value pair
+        OpenRouter's summary uses. A split-note row stacks its value under its
+        label once it no longer fits, and because the layout is only re-flowed
+        when a width drag ends, leaving that row out of the floor let the drag
+        pass the stacking point and spring into it on release.
+        """
+        row_width = max(
             (
                 row._inline_minimum_width()
                 for row in self._rows
-                if not row.bar.isHidden() and not row.pct.isHidden()
+                if (not row.bar.isHidden() and not row.pct.isHidden())
+                or row._split_note
             ),
             default=0,
         )
-        if gauge_width == 0:
+        if row_width == 0:
             return 0
         margins = self._layout.contentsMargins()
-        return gauge_width + margins.left() + margins.right()
+        return row_width + margins.left() + margins.right()
 
     def set_available_width(self, available_width: int) -> bool:
         self._available_width = max(0, available_width)
@@ -1456,6 +1476,21 @@ class _ProviderTile(QFrame):
         self.updateGeometry()
 
 
+class _StatusFooter(QWidget):
+    """Bottom row carrying the refresh status and the resize grip.
+
+    The hairline is painted rather than set as a stylesheet border: a plain
+    QWidget ignores one unless it is also told to style its background, which
+    would then paint over the panel this row sits on.
+    """
+
+    def paintEvent(self, event):  # noqa: N802
+        # Filled rather than stroked: a hairline stroke lands on a half device
+        # pixel at fractional display scaling and disappears.
+        painter = QPainter(self)
+        painter.fillRect(QRectF(0, 0, self.width(), 1), QColor(PANEL_BORDER))
+
+
 class _HorizontalResizeGrip(QWidget):
     """Bottom-right handle that changes only its target window's width."""
 
@@ -1536,6 +1571,7 @@ class UsageWidget(QWidget):
         self._config = config
         self._mouse_inside = False
         self._drag_offset: QPoint | None = None
+        self._press_global: QPoint | None = None
         self._drag_snap_corner: SnapCorner | None = None
         self._drag_snap_screen = None
         self._resizing_with_grip = False
@@ -1562,8 +1598,9 @@ class UsageWidget(QWidget):
         self._refresh_mode: str | None = None
         self._refresh_interval_minutes: int | None = None
         self._next_refresh_at: datetime | None = None
-        self._cadence_full_text = ""
         self._cadence_short_text = ""
+        self._age_text = ""
+        self._refreshing = False
         self._collapsed = config.window.collapsed
         self._header_visible = config.window.show_header
         self._always_on_top_suspensions = 0
@@ -1581,10 +1618,6 @@ class UsageWidget(QWidget):
         self.title_label.setStyleSheet(
             "color:#9ca3af; font-size:10px; font-weight:600;"
         )
-
-        self.cadence_label = QLabel("")
-        self.cadence_label.setStyleSheet("color:#6b7280; font-size:10px;")
-        self.cadence_label.setToolTip("")
 
         self.refresh_btn = self._mini_button("", "Refresh now")
         self.refresh_btn.setIcon(
@@ -1605,17 +1638,22 @@ class UsageWidget(QWidget):
         self.close_btn = self._mini_button("✕", "Quit AI Gauge")
         self.close_btn.clicked.connect(self.quit_requested.emit)
 
-        self.age_label = QLabel("")
-        self.age_label.setStyleSheet("color:#6b7280; font-size:10px;")
+        # Refresh status lives on the footer row, not here: the title bar
+        # carries identity and controls, and the footer keeps the status
+        # visible when the header is hidden.
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color:#6b7280; font-size:10px;")
+        self.status_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.status_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
 
         header = QHBoxLayout()
         header.setContentsMargins(8, 4, 4, 2)
         header.setSpacing(4)
         header.addWidget(self.title_icon)
         header.addWidget(self.title_label)
-        header.addWidget(self.cadence_label)
         header.addStretch(1)
-        header.addWidget(self.age_label)
         header.addWidget(self.refresh_btn)
         header.addWidget(self.collapse_btn)
         header.addWidget(self.settings_btn)
@@ -1726,10 +1764,12 @@ class UsageWidget(QWidget):
         outer.addWidget(self._tile_scroll)
         outer.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        self._resize_footer = QWidget(self)
-        self._resize_footer.setFixedHeight(14)
+        self._resize_footer = _StatusFooter(self)
+        self._resize_footer.setFixedHeight(FOOTER_HEIGHT)
         resize_footer_layout = QHBoxLayout(self._resize_footer)
-        resize_footer_layout.setContentsMargins(0, 0, 1, 1)
+        resize_footer_layout.setContentsMargins(8, 0, 1, 1)
+        resize_footer_layout.setSpacing(4)
+        resize_footer_layout.addWidget(self.status_label)
         resize_footer_layout.addStretch(1)
         self._resize_grip = _HorizontalResizeGrip(self, self._resize_footer)
         self._resize_grip.resize_started.connect(self._on_resize_started)
@@ -1895,19 +1935,16 @@ class UsageWidget(QWidget):
         )
 
     def _minimum_expanded_width(self) -> int:
-        gauge_width = max(
-            (
-                tile.minimum_inline_gauge_width()
-                for tile in self._tiles.values()
-            ),
+        content_width = max(
+            (tile.minimum_inline_width() for tile in self._tiles.values()),
             default=0,
         )
-        if gauge_width:
+        if content_width:
             margins = self._tile_layout.contentsMargins()
-            gauge_width += margins.left() + margins.right() + 8
+            content_width += margins.left() + margins.right() + 8
         return min(
             WINDOW_MAX_WIDTH,
-            max(EXPANDED_MIN_WIDTH, gauge_width),
+            max(EXPANDED_MIN_WIDTH, content_width),
         )
 
     def _collapsed_chrome_width(self) -> int:
@@ -2052,7 +2089,14 @@ class UsageWidget(QWidget):
             target_width = max(minimum_width, self._target_collapsed_width())
             if self.width() != target_width:
                 self.resize(target_width, self.height())
+                # The chips were wrapped against the previous width. A pill
+                # that just narrowed has to reflow before its height is
+                # measured, or a chip is clipped instead of moving down a row.
+                self._refresh_collapsed_summary()
             self._apply_responsive_collapsed_header()
+            # The floor is one chip row, not a fixed pill height: a pill wide
+            # enough to fit its chips on one row — or one with the header
+            # hidden — must not reserve space for a second row.
             target_height = max(
                 COLLAPSED_MIN_HEIGHT,
                 min(WINDOW_MAX_HEIGHT, self._collapsed_widget.sizeHint().height()),
@@ -2084,7 +2128,9 @@ class UsageWidget(QWidget):
         header_height = (
             self._header_widget.sizeHint().height() if self._header_visible else 0
         )
-        footer_height = self._resize_footer.sizeHint().height()
+        # The footer's height is fixed; its layout hint can come out smaller,
+        # and under-reporting it here lets the tiles overlap the footer row.
+        footer_height = max(FOOTER_HEIGHT, self._resize_footer.sizeHint().height())
         tile_height = self._tile_container.sizeHint().height()
         height_limit = self._available_expanded_height()
         max_tile_height = max(
@@ -2109,10 +2155,10 @@ class UsageWidget(QWidget):
 
     def set_refreshing(self, refreshing: bool) -> None:
         self.refresh_btn.setEnabled(not refreshing)
+        self._refreshing = refreshing
         if refreshing:
-            self.age_label.setText("refreshing…")
-            self.cadence_label.setText("· refreshing")
-            self.cadence_label.setToolTip("Refresh is currently running.")
+            self._collapsed_age_label.setText("refreshing…")
+        self._apply_footer_status()
         self._refresh_collapsed_summary()
 
     def set_refresh_state(
@@ -2138,46 +2184,21 @@ class UsageWidget(QWidget):
 
     def _refresh_age_label(self) -> None:
         text = "" if self._last_fetch_at is None else _format_age(self._last_fetch_at)
-        self.age_label.setText(text)
-        self._collapsed_age_label.setText(text)
+        self._age_text = text
+        self._collapsed_age_label.setText("refreshing…" if self._refreshing else text)
 
     def _apply_responsive_header(self) -> None:
         self.title_label.setText(f"AI Gauge {__version__}")
-        self.age_label.setVisible(bool(self.age_label.text()))
-        self.cadence_label.setText(self._cadence_full_text)
-        self.cadence_label.setVisible(bool(self._cadence_full_text))
         header_layout = self._header_widget.layout()
         header_layout.setContentsMargins(8, 4, 4, 2)
         header_layout.setSpacing(4)
         header_layout.invalidate()
         header_layout.activate()
 
-        # Progressively reduce secondary information only when the measured
-        # header no longer fits. Core controls always remain visible.
-        if (
-            not self.age_label.isHidden()
-            and header_layout.minimumSize().width() > self.width()
-        ):
-            self.age_label.hide()
-            header_layout.invalidate()
-            header_layout.activate()
-        if (
-            not self.cadence_label.isHidden()
-            and self._cadence_short_text
-            and header_layout.minimumSize().width() > self.width()
-        ):
-            self.cadence_label.setText(self._cadence_short_text)
-            header_layout.invalidate()
-            header_layout.activate()
+        # Progressively reduce the identity text only when the measured header
+        # no longer fits. Core controls always remain visible.
         if header_layout.minimumSize().width() > self.width():
             self.title_label.setText("AI Gauge")
-            header_layout.invalidate()
-            header_layout.activate()
-        if (
-            not self.cadence_label.isHidden()
-            and header_layout.minimumSize().width() > self.width()
-        ):
-            self.cadence_label.hide()
             header_layout.invalidate()
             header_layout.activate()
         if header_layout.minimumSize().width() > self.width():
@@ -2190,30 +2211,76 @@ class UsageWidget(QWidget):
             header_layout.invalidate()
             header_layout.activate()
 
+    def _footer_status_texts(self) -> tuple[str, str, str]:
+        """Footer text at full and narrow widths, plus its shared tooltip."""
+        if self._refreshing:
+            return "Refreshing…", "Refreshing…", "Refresh is currently running."
+        age = f"Updated {self._age_text}" if self._age_text else ""
+        remaining = self._cadence_short_text
+        countdown = f"next {remaining}" if remaining else ""
+        full = " · ".join(part for part in (age, countdown) if part)
+        lines = []
+        if self._last_fetch_at is not None:
+            lines.append(
+                "Last refresh: "
+                f"{self._last_fetch_at.strftime('%Y-%m-%d %H:%M:%S')} "
+                f"({self._age_text})"
+            )
+        if self._next_refresh_at is not None:
+            interval = self._refresh_interval_minutes or 0
+            lines.append(
+                "Next auto-refresh: "
+                f"{self._next_refresh_at.strftime('%Y-%m-%d %H:%M:%S')} "
+                f"— {self._refresh_mode} mode, {interval} min cadence"
+            )
+        if full:
+            lines.append("Click to refresh now.")
+        return full, countdown or full, "\n".join(lines)
+
+    def _apply_footer_status(self) -> None:
+        """Render the footer status, shedding the age half if it cannot fit."""
+        full, short, tooltip = self._footer_status_texts()
+        color = "#9ca3af" if self._refresh_mode == "active" else "#6b7280"
+        self.status_label.setStyleSheet(f"color:{color}; font-size:10px;")
+        self.status_label.setToolTip(tooltip)
+        self.status_label.setText(full)
+        self.status_label.setVisible(bool(full))
+        footer_layout = self._resize_footer.layout()
+        footer_layout.invalidate()
+        footer_layout.activate()
+        if (
+            not self.status_label.isHidden()
+            and short != full
+            and footer_layout.minimumSize().width() > self.width()
+        ):
+            self.status_label.setText(short)
+            footer_layout.invalidate()
+            footer_layout.activate()
+        if (
+            not self.status_label.isHidden()
+            and footer_layout.minimumSize().width() > self.width()
+        ):
+            self.status_label.hide()
+
     def _refresh_cadence_label(self) -> None:
         if self._refresh_mode is None or self._next_refresh_at is None:
-            self._cadence_full_text = ""
             self._cadence_short_text = ""
-            self.cadence_label.setText("")
-            self.cadence_label.setToolTip("")
-            self._apply_responsive_header()
+            self._collapsed_cadence_label.setText("")
+            self._collapsed_cadence_label.setToolTip("")
+            self._apply_footer_status()
             return
         remaining = _format_countdown(self._next_refresh_at)
-        self._cadence_full_text = f"· {self._refresh_mode} next {remaining}"
         self._cadence_short_text = remaining
-        self.cadence_label.setText(self._cadence_full_text)
         self._collapsed_cadence_label.setText(remaining)
         interval = self._refresh_interval_minutes or 0
         tooltip = (
             f"In {self._refresh_mode} mode — {interval} min cadence. "
             f"Next auto-refresh: {self._next_refresh_at.strftime('%Y-%m-%d %H:%M:%S')}."
         )
-        self.cadence_label.setToolTip(tooltip)
         self._collapsed_cadence_label.setToolTip(tooltip)
         color = "#9ca3af" if self._refresh_mode == "active" else "#6b7280"
-        self.cadence_label.setStyleSheet(f"color:{color}; font-size:10px;")
         self._collapsed_cadence_label.setStyleSheet(f"color:{color}; font-size:10px;")
-        self._apply_responsive_header()
+        self._apply_footer_status()
 
     def _session_summary_for(self, provider: str) -> str:
         display = display_name_for_account(self._config, provider)
@@ -2785,7 +2852,8 @@ class UsageWidget(QWidget):
         super().resizeEvent(event)
         self._apply_corner_mask()
         self._position_overlaid_grip()
-        if hasattr(self, "cadence_label"):
+        if hasattr(self, "status_label"):
+            self._apply_responsive_header()
             self._refresh_cadence_label()
 
     def _save_collapsed_width(self) -> None:
@@ -2841,6 +2909,7 @@ class UsageWidget(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
             self.activated_requested.emit()
+            self._press_global = event.globalPosition().toPoint()
             self._drag_offset = (
                 event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             )
@@ -2892,10 +2961,31 @@ class UsageWidget(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() != Qt.MouseButton.LeftButton or self._drag_offset is None:
+            self._press_global = None
             super().mouseReleaseEvent(event)
             return
-        self._finish_window_drag(event.globalPosition().toPoint())
+        release = event.globalPosition().toPoint()
+        refresh = self._is_status_click(release)
+        self._finish_window_drag(release)
+        self._press_global = None
+        if refresh:
+            self.refresh_requested.emit()
         event.accept()
+
+    def _is_status_click(self, release_global: QPoint) -> bool:
+        """True for a press and release on the footer status without a drag.
+
+        The window is draggable from anywhere, so the press stays ambiguous
+        until release: a click refreshes, any real movement moves the window.
+        """
+        press = self._press_global
+        if press is None or not self.status_label.isVisibleTo(self):
+            return False
+        if (release_global - press).manhattanLength() > STATUS_CLICK_SLOP:
+            return False
+        return self.status_label.rect().contains(
+            self.status_label.mapFromGlobal(press)
+        )
 
     def closeEvent(self, event):  # noqa: N802
         self._do_refit_height()

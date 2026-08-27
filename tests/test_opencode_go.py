@@ -53,6 +53,34 @@ def test_opencode_go_builds_three_usage_metrics_from_rows():
     assert all(m.resets_at is not None for m in snapshot.metrics)
 
 
+def test_opencode_go_maps_current_five_hour_row_to_rolling_metric():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "usage": [
+                {
+                    "label": "5-hour Usage",
+                    "percent": 4.4,
+                    "reset_text": "Resets in 4 hours 34 minutes",
+                },
+                {"label": "Weekly Usage", "percent": 1.8},
+                {"label": "Monthly Usage", "percent": 0.9},
+            ],
+            "title": "OpenCode",
+            "body_text": "5-hour Usage 4.4% Weekly Usage 1.8% Monthly Usage 0.9%",
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [(m.label, m.percent_used) for m in snapshot.metrics] == [
+        ("Rolling", 4.4),
+        ("Weekly", 1.8),
+        ("Monthly", 0.9),
+    ]
+    assert snapshot.metrics[0].window == timedelta(hours=5)
+    assert snapshot.metrics[0].resets_at is not None
+
+
 def test_opencode_go_body_text_fallback_reads_visible_usage():
     snapshot = _build_snapshot(
         {
@@ -69,6 +97,28 @@ def test_opencode_go_body_text_fallback_reads_visible_usage():
 
     assert snapshot.status == SnapshotStatus.OK
     assert [m.label for m in snapshot.metrics] == ["Rolling", "Weekly", "Monthly"]
+
+
+def test_opencode_go_body_text_fallback_accepts_five_hour_usage():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "usage": [],
+            "title": "OpenCode",
+            "body_text": (
+                "5-hour Usage 4.4% Resets in 4 hours 34 minutes "
+                "Weekly Usage 1.8% Resets in 3 days 23 hours "
+                "Monthly Usage 0.9% Resets in 29 days 20 hours"
+            ),
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [(m.label, m.percent_used) for m in snapshot.metrics] == [
+        ("Rolling", 4.4),
+        ("Weekly", 1.8),
+        ("Monthly", 0.9),
+    ]
 
 
 def test_opencode_go_logged_out_payload_is_auth_required():

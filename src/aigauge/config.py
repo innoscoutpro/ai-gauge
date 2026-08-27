@@ -16,11 +16,15 @@ KEYRING_GITHUB_PAT = "github-pat"
 KEYRING_OPENROUTER_KEY = "openrouter-key"
 KEYRING_OPENROUTER_MGMT_KEY = "openrouter-mgmt-key"
 WINDOW_WIDTH = 340
-WINDOW_MIN_WIDTH = 280
+WINDOW_MIN_WIDTH = 240
 WINDOW_MAX_WIDTH = 900
 WINDOW_MIN_HEIGHT = 80
 WINDOW_MAX_HEIGHT = 900
-WINDOW_COLLAPSED_HEIGHT = 58
+# Compact mode's true floor: one chip row (18px plus its 4px pace notch) and
+# the pill's 4/6 vertical margins. Anything above that — the header, a second
+# wrapped chip row — is added by the content itself, so a pill wide enough for
+# a single row is only one row tall.
+WINDOW_COLLAPSED_MIN_HEIGHT = 32
 # The collapsed pill sizes itself to its own content and can be dragged
 # narrower than the expanded panel's floor — a single-provider user should not
 # be stuck with a mostly-empty 340px strip (issue #7).

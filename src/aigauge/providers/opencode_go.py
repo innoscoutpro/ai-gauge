@@ -52,7 +52,7 @@ EXTRACTOR_JS = r"""
     usage: items.map(readItem),
     url: location.href,
     title: document.title,
-    has_usage_text: /rolling usage|weekly usage|monthly usage/i.test(bodyText),
+    has_usage_text: /rolling usage|5[- ]hour usage|weekly usage|monthly usage/i.test(bodyText),
     has_percent_text: /\d+(?:\.\d+)?\s*%/.test(bodyText),
     body_text: bodyText.slice(0, 2000),
   };
@@ -104,6 +104,8 @@ def _parse_reset_text(text: str | None) -> datetime | None:
 
 def _metric_label(label: str) -> str:
     label = re.sub(r"\s+usage\b", "", label.strip(), flags=re.IGNORECASE)
+    if re.fullmatch(r"5[- ]hour", label, flags=re.IGNORECASE):
+        return "Rolling"
     return label.title()
 
 
@@ -122,9 +124,9 @@ def _parse_body_usage(body_text: str) -> list[dict[str, Any]]:
     text = re.sub(r"\s+", " ", body_text or "").strip()
     rows: list[dict[str, Any]] = []
     pattern = re.compile(
-        r"\b(Rolling|Weekly|Monthly)\s+Usage\b\s*(\d+(?:\.\d+)?)\s*%"
+        r"\b(Rolling|5[- ]hour|Weekly|Monthly)\s+Usage\b\s*(\d+(?:\.\d+)?)\s*%"
         r"(?:\s*Resets?\s+in\s+(.+?))?"
-        r"(?=\s+\b(?:Rolling|Weekly|Monthly)\s+Usage\b|$)",
+        r"(?=\s+\b(?:Rolling|5[- ]hour|Weekly|Monthly)\s+Usage\b|$)",
         re.IGNORECASE,
     )
     for match in pattern.finditer(text):

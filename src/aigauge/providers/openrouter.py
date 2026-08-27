@@ -200,26 +200,29 @@ def _build_summary_metric(
 ) -> UsageMetric | None:
     remaining = _remaining_balance(credits)
 
+    # The row is a single line in a narrow panel, so each figure carries only
+    # the word that identifies it — "left" and "Spend" are redundant next to a
+    # balance and a date range. The note keeps the fully descriptive wording.
     parts: list[str] = []
     if remaining is not None:
-        parts.append(f"Balance ${remaining:.2f} left")
+        parts.append(f"Balance ${remaining:.2f}")
     spend_fields = [
-        ("today", _usage_amount(key_info, "usage_daily")),
-        ("month", _usage_amount(key_info, "usage_monthly")),
+        ("Today", _usage_amount(key_info, "usage_daily")),
+        ("Month", _usage_amount(key_info, "usage_monthly")),
     ]
     spend_parts = [
         f"{label} ${amount:.2f}" for label, amount in spend_fields if amount is not None
     ]
-    if spend_parts:
-        parts.append(f"Spend {' / '.join(spend_parts)}")
+    parts.extend(spend_parts)
     if not parts:
         return None
     return UsageMetric(
         label=" · ".join(parts),
         percent_used=None,
         note=(
-            "OpenRouter account balance, current UTC day spend, and current "
-            "UTC month spend."
+            "Balance is the credit remaining on the OpenRouter account. "
+            "Today and Month are spend for the current UTC day and the "
+            "current UTC month."
         ),
     )
 

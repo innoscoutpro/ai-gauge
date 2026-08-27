@@ -4,8 +4,18 @@
 
 ## 0.7.6 - unreleased
 
+### Changed
+
+- Moved the refresh status out of the title bar and onto the resize-grip row, where it reads **Updated 1m ago · next 4m** next to the grip and is separated from the provider tiles by a hairline. The title bar keeps the app name, version, and controls; the footer keeps the status visible when **Show header** is off, dims to grey when refreshing is idle, and refreshes immediately when clicked (a drag that starts there still moves the window). Its tooltip gives the exact last and next refresh times.
+- Let the full panel be dragged noticeably narrower. The gauge bar's minimum width dropped from 120px to 80px and the metric-label column's floor from 70px to 56px, so a panel showing Claude, Codex, OpenCode, and OpenRouter now bottoms out near 250px instead of ~295px. Labels, gauges, percentages, and reset times all stay on one line at the new floor.
+- Shortened OpenRouter's summary row to **Balance $49.96 · Today $0.00 · Month $232.25**. The words *left* and *Spend* said nothing the figures did not, and the row now fits a narrower panel. The full wording moved to the row's tooltip.
+
 ### Fixed
 
+- Fixed the panel springing to a taller layout the moment a width drag ended. Tiles only re-flow on release, and the resize floor counted percentage-gauge rows only — so a drag could pass the width where OpenRouter's summary row stacks its spend under its balance, and the row jumped onto two lines as soon as the mouse came up, leaving the panel to be widened again by hand. The floor now includes that row, so letting go settles on exactly what the drag showed.
+- Fixed compact view always reserving room for a second row of chips. Its height floor was a fixed 58px — roughly two rows — so a pill wide enough for one row, or one with the header hidden, kept the empty space anyway. The floor is now a single chip row, and extra rows or a visible header add their own height.
+- Fixed compact chips being clipped instead of wrapping when the pill narrowed itself, most visibly when **Show header** was turned off.
+- Restored OpenCode's missing short-window gauge after its usage page renamed **Rolling Usage** to **5-hour Usage**. Both labels are accepted and continue to use the existing Rolling metric identity and five-hour pacing window.
 - Fixed the download growing by roughly 36 MB in 0.7.5. The packaged `ai-gauge-mcp` helper bundled Pillow and pygments, reached through the MCP SDK's HTTP client, which a stdio JSON-RPC server never uses. Excluding them cuts the helper by about 30% (~8.6 MB off every platform's archive). The helper still carries its own copy of the Python runtime that the application folder already ships; sharing that is tracked separately.
 
 ## 0.7.5 - 2026-08-23

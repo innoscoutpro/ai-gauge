@@ -65,7 +65,7 @@ def test_build_daily_metric_without_budget():
     )
     assert m is not None
     assert m.percent_used is None
-    assert m.label == "Balance $74.50 left · Spend today $2.50 / month $20.75"
+    assert m.label == "Balance $74.50 · Today $2.50 · Month $20.75"
     assert m.note is not None
     assert "current UTC day" in m.note
 
@@ -492,7 +492,7 @@ def test_refresh_skips_management_endpoints_when_no_mgmt_key(monkeypatch):
     snap = captured[0]
     assert snap.status == SnapshotStatus.OK
     assert any(m.label == "Account balance" for m in snap.metrics)
-    assert any("Spend today" in m.label for m in snap.metrics)
+    assert any("Today $" in m.label for m in snap.metrics)
 
     # Critical: management endpoints must not be called when no management key
     # is configured.

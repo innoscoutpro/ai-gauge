@@ -8,8 +8,9 @@ from PyQt6.QtWidgets import QApplication
 
 from aigauge import __version__
 from aigauge.config import (
-    WINDOW_COLLAPSED_HEIGHT,
+    WINDOW_COLLAPSED_MIN_HEIGHT,
     WINDOW_COLLAPSED_MIN_WIDTH,
+    WINDOW_MIN_WIDTH,
     BrowserAccount,
     ColorThresholds,
     Config,
@@ -18,9 +19,11 @@ from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
 from aigauge.ratio import RatioEstimate
 from aigauge.widget import (
     CORNER_SNAP_DISTANCE,
+    MIN_GAUGE_WIDTH,
     CORNER_SNAP_INSET,
     CORNER_SNAP_RELEASE_DISTANCE,
     PANEL_BG,
+    PANEL_BORDER,
     UsageWidget,
     _format_ratio_inline,
     _MetricRow,
@@ -752,8 +755,8 @@ def test_expanded_refresh_state_includes_next_refresh_countdown(qtbot):
         next_at=datetime.now() + timedelta(minutes=3, seconds=5),
     )
 
-    assert widget.cadence_label.text().endswith("4m")
-    assert "5 min cadence" in widget.cadence_label.toolTip()
+    assert widget.status_label.text().endswith("next 4m")
+    assert "5 min cadence" in widget.status_label.toolTip()
 
 
 def test_expanded_refresh_state_includes_now_when_refresh_is_due(qtbot):
@@ -766,7 +769,99 @@ def test_expanded_refresh_state_includes_now_when_refresh_is_due(qtbot):
         next_at=datetime.now() - timedelta(seconds=1),
     )
 
-    assert widget.cadence_label.text().endswith("now")
+    assert widget.status_label.text().endswith("next now")
+
+
+def test_refresh_status_sits_on_the_footer_not_the_title_bar(qtbot):
+    """The title bar keeps identity and controls; status moves to the footer."""
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.set_refresh_state(True, 5, datetime.now() + timedelta(minutes=4))
+    widget._last_fetch_at = datetime.now() - timedelta(minutes=1)  # noqa: SLF001
+    widget._refresh_header_labels()  # noqa: SLF001
+
+    assert widget.status_label.parent() is widget._resize_footer  # noqa: SLF001
+    assert widget.status_label.text() == "Updated 1m ago · next 4m"
+    assert widget.title_label.text() == f"AI Gauge {__version__}"
+
+    header_texts = [
+        widget._header_widget.layout().itemAt(i).widget()  # noqa: SLF001
+        for i in range(widget._header_widget.layout().count())  # noqa: SLF001
+    ]
+    assert widget.status_label not in header_texts
+
+
+def test_refresh_status_stays_visible_when_the_header_is_hidden(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(_ok_snapshot("codex"), "Codex")
+    widget.set_refresh_state(True, 5, datetime.now() + timedelta(minutes=4))
+    widget._refresh_header_labels()  # noqa: SLF001
+
+    widget.set_header_visible(False)
+
+    assert widget._header_widget.isVisibleTo(widget) is False  # noqa: SLF001
+    assert widget._resize_footer.isVisibleTo(widget) is True  # noqa: SLF001
+    assert widget.status_label.isVisibleTo(widget) is True
+    assert "next 4m" in widget.status_label.text()
+
+
+def test_refresh_status_shows_refreshing_then_returns_to_the_countdown(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.set_refresh_state(True, 5, datetime.now() + timedelta(minutes=4))
+    widget._last_fetch_at = datetime.now() - timedelta(minutes=1)  # noqa: SLF001
+    widget._refresh_header_labels()  # noqa: SLF001
+
+    widget.set_refreshing(True)
+    assert widget.status_label.text() == "Refreshing…"
+
+    widget.set_refreshing(False)
+    widget._refresh_header_labels()  # noqa: SLF001
+    assert widget.status_label.text() == "Updated 1m ago · next 4m"
+
+
+def test_refresh_status_sheds_the_age_half_before_hiding(qtbot, monkeypatch):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.set_refresh_state(True, 5, datetime.now() + timedelta(minutes=4))
+    widget._last_fetch_at = datetime.now() - timedelta(minutes=1)  # noqa: SLF001
+    widget._refresh_header_labels()  # noqa: SLF001
+    assert widget.status_label.text() == "Updated 1m ago · next 4m"
+
+    monkeypatch.setattr(widget, "width", lambda: 60)
+    widget._apply_footer_status()  # noqa: SLF001
+    assert widget.status_label.text() == "next 4m"
+
+    monkeypatch.setattr(widget, "width", lambda: 4)
+    widget._apply_footer_status()  # noqa: SLF001
+    assert widget.status_label.isHidden()
+
+
+def test_clicking_the_footer_status_refreshes_but_dragging_does_not(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.set_refresh_state(True, 5, datetime.now() + timedelta(minutes=4))
+    widget._last_fetch_at = datetime.now() - timedelta(minutes=1)  # noqa: SLF001
+    widget._refresh_header_labels()  # noqa: SLF001
+    widget.resize(340, widget.height())
+    widget.show()
+    widget._do_refit_height()  # noqa: SLF001
+
+    requested = []
+    widget.refresh_requested.connect(lambda: requested.append(True))
+
+    origin = widget.status_label.mapToGlobal(
+        widget.status_label.rect().center()
+    )
+    widget._press_global = origin  # noqa: SLF001
+    assert widget._is_status_click(origin) is True  # noqa: SLF001
+    # A drag that happens to start on the status text moves the window instead.
+    assert widget._is_status_click(origin + QPoint(30, 0)) is False  # noqa: SLF001
+    # So does a click that lands anywhere else on the panel.
+    widget._press_global = widget.mapToGlobal(QPoint(4, 4))  # noqa: SLF001
+    assert widget._is_status_click(widget._press_global) is False  # noqa: SLF001
 
 
 def test_widget_clamps_saved_width_and_ignores_saved_height(qtbot):
@@ -850,9 +945,7 @@ def test_resize_grip_stops_before_standard_gauge_rows_would_wrap(qtbot):
             provider="openrouter",
             status=SnapshotStatus.OK,
             metrics=[
-                UsageMetric(
-                    "Balance $51.39 left · Spend today $0.00 / month $95.11"
-                )
+                UsageMetric("Balance $51.39 · Today $0.00 · Month $95.11")
             ],
         ),
         "OpenRouter",
@@ -872,7 +965,7 @@ def test_resize_grip_stops_before_standard_gauge_rows_would_wrap(qtbot):
     wide_height = widget.height()
     minimum_width = widget.minimumWidth()
 
-    assert minimum_width > 280
+    assert minimum_width > WINDOW_MIN_WIDTH
     assert compact_tile._compact_below_header is False  # noqa: SLF001
     assert openrouter_row._reset_stacked is False  # noqa: SLF001
 
@@ -923,6 +1016,62 @@ def test_resize_grip_stops_before_standard_gauge_rows_would_wrap(qtbot):
     assert openrouter_row._reset_stacked is False  # noqa: SLF001
     assert widget.title_label.text() == f"AI Gauge {__version__}"
 
+def test_resize_grip_stops_before_the_openrouter_row_would_stack(qtbot):
+    """The tile layout only re-flows once the drag ends.
+
+    The width floor left OpenRouter's summary row out, so a drag could pass
+    the point where that row stacks its spend under its balance and then
+    spring onto two lines the moment the mouse came up.
+    """
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(_ok_snapshot("claude"), "Claude")
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="openrouter",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric("Balance $49.96 · Today $0.00 · Month $232.25")
+            ],
+        ),
+        "OpenRouter",
+    )
+    widget.show()
+    widget.resize(620, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+    row = widget._tiles["openrouter"]._rows[0]  # noqa: SLF001
+    assert row._reset_stacked is False  # noqa: SLF001
+
+    grip = widget._resize_grip  # noqa: SLF001
+    start = grip.rect().center()
+    QTest.mousePress(
+        grip,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        start,
+    )
+    last_pos = start
+    for delta in (-100, -200, -300, -400):
+        last_pos = QPoint(start.x() + delta, start.y())
+        QTest.mouseMove(grip, last_pos)
+        QApplication.processEvents()
+    during = (widget.width(), widget.height(), row._reset_stacked)  # noqa: SLF001
+
+    QTest.mouseRelease(
+        grip,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        last_pos,
+    )
+    QApplication.processEvents()
+
+    # Releasing settles on exactly what the drag was already showing.
+    assert (widget.width(), widget.height(), row._reset_stacked) == during  # noqa: SLF001
+    assert row._reset_stacked is False  # noqa: SLF001
+    assert widget.width() == widget.minimumWidth()
+
+
 def test_expanded_height_caps_and_scrolls_when_content_exceeds_screen(
     qtbot,
     monkeypatch,
@@ -961,48 +1110,78 @@ def test_resize_grip_has_its_own_footer_below_provider_content(qtbot):
     )
 
 
-def test_expanded_header_compacts_progressively_at_280(qtbot, monkeypatch):
+def test_dense_panel_narrows_past_the_old_280_floor(qtbot):
+    """The gauge row's own minimums used to hold a dense panel at ~295px."""
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
-    # A hidden parent makes Qt report effective visibility as false even when
-    # these labels are logically enabled. Compaction must use hidden state.
-    monkeypatch.setattr(widget.age_label, "isVisible", lambda: False)
-    monkeypatch.setattr(widget.cadence_label, "isVisible", lambda: False)
+    widget.update_snapshot(_ok_snapshot("claude"), "Claude")
+    widget.update_snapshot(_ok_snapshot("codex"), "Codex")
+    widget.show()
+    widget.resize(620, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+
+    widget.resize(100, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+
+    assert widget.width() == widget.minimumWidth() < 280
+    row = widget._tiles["claude"]._rows[0]  # noqa: SLF001
+    # The row is still one line: label, gauge, percent, reset.
+    assert row.bar.y() < row.label.geometry().bottom()
+    assert row.bar.geometry().right() < row.pct.x()
+    assert row.reset.geometry().right() <= row.rect().right()
+    assert row.bar.width() >= MIN_GAUGE_WIDTH
+
+
+def test_expanded_header_survives_the_width_floor_intact(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
     next_at = datetime.now() + timedelta(minutes=4)
     widget.set_refresh_state(True, 5, next_at)
     widget._last_fetch_at = datetime.now() - timedelta(minutes=1)  # noqa: SLF001
     widget._refresh_header_labels()  # noqa: SLF001
 
     widget.resize(620, widget.height())
-    widget._refresh_cadence_label()  # noqa: SLF001
+    widget._apply_responsive_header()  # noqa: SLF001
     assert widget.title_label.text() == f"AI Gauge {__version__}"
-    assert not widget.age_label.isHidden()
-    assert "active next" in widget.cadence_label.text()
+    # The status text moved to the footer, so it no longer competes with the
+    # controls for title-bar width.
+    assert widget.status_label.text() == "Updated 1m ago · next 4m"
 
-    widget.resize(360, widget.height())
-    widget._refresh_cadence_label()  # noqa: SLF001
-    assert widget.width() == 360
-    assert widget.cadence_label.text().endswith("4m")
-    assert widget._header_widget.minimumSizeHint().width() <= widget.width()  # noqa: SLF001
-
-    widget.resize(280, widget.height())
-    widget._refresh_cadence_label()  # noqa: SLF001
-    assert widget.width() == 280
-    assert not widget.title_label.isHidden()
+    # A provider-less panel bottoms out at the constant floor, and everything
+    # in the title bar still fits there.
+    widget.resize(100, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    widget._apply_responsive_header()  # noqa: SLF001
+    assert widget.width() == WINDOW_MIN_WIDTH
+    assert widget.title_label.text() == f"AI Gauge {__version__}"
     assert not widget.refresh_btn.isHidden()
     assert not widget.settings_btn.isHidden()
     assert not widget.close_btn.isHidden()
-    assert widget.age_label.isHidden()
+    assert widget.status_label.text() == "Updated 1m ago · next 4m"
     assert widget._header_widget.minimumSizeHint().width() <= widget.width()  # noqa: SLF001
 
-    widget.resize(200, widget.height())
-    assert widget.width() == 280
 
-    widget.resize(620, widget.height())
-    widget._refresh_cadence_label()  # noqa: SLF001
+def test_expanded_header_compacts_progressively_when_it_cannot_fit(
+    qtbot, monkeypatch
+):
+    """Safety net for a title bar narrower than its own contents."""
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget._apply_responsive_header()  # noqa: SLF001
     assert widget.title_label.text() == f"AI Gauge {__version__}"
-    assert not widget.age_label.isHidden()
-    assert "active next" in widget.cadence_label.text()
+
+    monkeypatch.setattr(widget, "width", lambda: 200)
+    widget._apply_responsive_header()  # noqa: SLF001
+    assert widget.title_label.text() == "AI Gauge"
+
+    monkeypatch.setattr(widget, "width", lambda: 120)
+    widget._apply_responsive_header()  # noqa: SLF001
+    assert widget.title_label.text() == "AI"
+    assert not widget.refresh_btn.isHidden()
+    assert not widget.settings_btn.isHidden()
+    assert not widget.close_btn.isHidden()
 
 
 def test_metric_row_clamps_overage_fill_and_uses_account_threshold_color(qtbot):
@@ -1065,9 +1244,10 @@ def test_provider_gauges_share_normalized_columns_at_minimum_width(qtbot):
 
     assert_columns_aligned()
     minimum_width = widget.minimumWidth()
-    assert minimum_width > 280
+    assert minimum_width > WINDOW_MIN_WIDTH
 
-    widget.resize(280, widget.height())
+    # Asking for less than the content floor clamps back up to it.
+    widget.resize(100, widget.height())
     widget._do_refit_height()  # noqa: SLF001
     QApplication.processEvents()
     assert widget.width() == minimum_width
@@ -1179,7 +1359,7 @@ def test_collapsed_mode_shows_openrouter_today_without_balance(qtbot):
             status=SnapshotStatus.OK,
             metrics=[
                 UsageMetric(
-                    "Spend today $1.31 / month $21.90",
+                    "Today $1.31 · Month $21.90",
                     None,
                 )
             ],
@@ -1202,7 +1382,7 @@ def test_collapsed_mode_resizes_immediately(qtbot):
     # Collapsing shrinks to the pill's fitted height straight away rather than
     # keeping the expanded height until the next refit.
     assert widget.height() == widget.minimumHeight() == widget.maximumHeight()
-    assert widget.height() <= WINDOW_COLLAPSED_HEIGHT + 8
+    assert widget.height() <= WINDOW_COLLAPSED_MIN_HEIGHT + 34
 
 
 def test_panel_palette_never_leaves_light_corners(qtbot):
@@ -1294,6 +1474,75 @@ def test_collapsed_header_sheds_detail_as_the_pill_narrows(qtbot):
     assert widget._collapsed_title.text() == ""  # noqa: SLF001
 
 
+def test_compact_pill_height_follows_its_row_count(qtbot):
+    """Regression: compact mode used to be floored at a two-row height.
+
+    A pill wide enough to fit every chip on one row — or one with the header
+    hidden — reserved space for a second row it never used.
+    """
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    for provider, name in (
+        ("claude", "Claude"),
+        ("codex", "Codex"),
+        ("copilot", "Copilot"),
+    ):
+        widget.update_snapshot(_ok_snapshot(provider), name)
+    widget.set_collapsed(True)
+    widget.set_header_visible(False)
+
+    widget.resize(700, widget.height())
+    widget._on_resize_finished()  # noqa: SLF001
+
+    margins = widget._collapsed_widget.layout().contentsMargins()  # noqa: SLF001
+    one_row = margins.top() + margins.bottom() + _SummaryChip().height()
+    assert one_row == WINDOW_COLLAPSED_MIN_HEIGHT
+    assert widget.height() == one_row
+
+    # Narrowing wraps the chips, and the pill grows by exactly what that costs.
+    widget.resize(widget.minimumWidth(), widget.height())
+    widget._on_resize_finished()  # noqa: SLF001
+    assert widget.height() > one_row
+
+
+def test_compact_pill_reflows_its_chips_when_it_narrows(qtbot):
+    """Hiding the header narrows the pill; the chips must wrap, not clip."""
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(_ok_snapshot("claude"), "Claude")
+    widget.update_snapshot(_ok_snapshot("copilot"), "Copilot")
+    widget.set_collapsed(True)
+
+    widget.set_header_visible(False)
+
+    layout = widget._collapsed_summary_layout  # noqa: SLF001
+    rows = [
+        layout.itemAt(i).widget()
+        for i in range(layout.count())
+        if layout.itemAt(i).widget() is not widget._collapsed_label  # noqa: SLF001
+    ]
+    chrome = widget._collapsed_chrome_width()  # noqa: SLF001
+    for row in rows:
+        chips = [
+            row.layout().itemAt(i).widget()
+            for i in range(row.layout().count())
+            if row.layout().itemAt(i).widget() is not None
+        ]
+        assert chips
+        assert max(c.x() + c.width() for c in chips) <= widget.width() - chrome
+
+
+def test_footer_draws_a_divider_above_the_status_row(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.show()
+    widget._do_refit_height()  # noqa: SLF001
+
+    image = widget._resize_footer.grab().toImage()  # noqa: SLF001
+
+    assert image.pixelColor(image.width() // 2, 0).name() == PANEL_BORDER
+
+
 def test_collapsed_pill_keeps_its_height_when_the_grip_appears(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
@@ -1304,7 +1553,7 @@ def test_collapsed_pill_keeps_its_height_when_the_grip_appears(qtbot):
     # making the pill resizable must not make it taller.
     assert widget._grip_overlaid is True  # noqa: SLF001
     assert widget._resize_footer.isVisibleTo(widget) is False  # noqa: SLF001
-    assert widget.height() == WINDOW_COLLAPSED_HEIGHT
+    assert widget.height() == widget._collapsed_widget.sizeHint().height()  # noqa: SLF001
 
     widget.set_collapsed(False)
     assert widget._grip_overlaid is False  # noqa: SLF001
@@ -1319,7 +1568,7 @@ def test_openrouter_model_expand_resizes_immediately(qtbot):
             provider="openrouter",
             status=SnapshotStatus.OK,
             metrics=[
-                UsageMetric("Balance $11.50 left · Spend today $0.00", None),
+                UsageMetric("Balance $11.50 · Today $0.00", None),
                 UsageMetric("Models: last 30 completed UTC days", None, tag="models"),
                 UsageMetric("claude-sonnet-4", 42.0, tag="models"),
                 UsageMetric("gpt-4.1", 21.0, tag="models"),
@@ -1479,14 +1728,14 @@ def test_metric_row_right_aligns_split_note_metric(qtbot):
     qtbot.addWidget(row)
 
     row.set_metric(
-        "Balance $11.50 left · Spend today $0.00 / month $0.00",
+        "Balance $11.50 · Today $0.00 · Month $0.00",
         None,
         None,
         note="OpenRouter summary.",
     )
 
-    assert row.label.text() == "Balance $11.50 left"
-    assert row.reset.text() == "Spend today $0.00 / month $0.00"
+    assert row.label.text() == "Balance $11.50"
+    assert row.reset.text() == "Today $0.00 · Month $0.00"
     assert row.reset.width() >= (
         row.reset.fontMetrics().horizontalAdvance(row.reset.text()) + 4
     )
