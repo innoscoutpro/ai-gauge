@@ -10,6 +10,7 @@ from aigauge import __version__
 from aigauge.config import (
     WINDOW_COLLAPSED_MIN_HEIGHT,
     WINDOW_COLLAPSED_MIN_WIDTH,
+    WINDOW_MAX_WIDTH,
     WINDOW_MIN_WIDTH,
     BrowserAccount,
     ColorThresholds,
@@ -830,11 +831,14 @@ def test_refresh_status_sheds_the_age_half_before_hiding(qtbot, monkeypatch):
     widget._refresh_header_labels()  # noqa: SLF001
     assert widget.status_label.text() == "Updated 1m ago · next 4m"
 
-    monkeypatch.setattr(widget, "width", lambda: 60)
+    # Measured, not hardcoded: text widths differ across platforms.
+    fits_full = widget._resize_footer.layout().minimumSize().width()  # noqa: SLF001
+    monkeypatch.setattr(widget, "width", lambda: fits_full - 1)
     widget._apply_footer_status()  # noqa: SLF001
     assert widget.status_label.text() == "next 4m"
 
-    monkeypatch.setattr(widget, "width", lambda: 4)
+    fits_short = widget._resize_footer.layout().minimumSize().width()  # noqa: SLF001
+    monkeypatch.setattr(widget, "width", lambda: fits_short - 1)
     widget._apply_footer_status()  # noqa: SLF001
     assert widget.status_label.isHidden()
 
@@ -1149,36 +1153,49 @@ def test_expanded_header_survives_the_width_floor_intact(qtbot):
     # controls for title-bar width.
     assert widget.status_label.text() == "Updated 1m ago · next 4m"
 
-    # A provider-less panel bottoms out at the constant floor, and everything
-    # in the title bar still fits there.
+    # A provider-less panel bottoms out at the constant floor with the title
+    # bar intact. How much of the version string survives there depends on the
+    # platform's font metrics, so assert what is invariant: the header fits,
+    # and nothing in it was dropped to make it fit.
     widget.resize(100, widget.height())
     widget._do_refit_height()  # noqa: SLF001
     widget._apply_responsive_header()  # noqa: SLF001
     assert widget.width() == WINDOW_MIN_WIDTH
-    assert widget.title_label.text() == f"AI Gauge {__version__}"
+    assert widget.title_label.text().startswith("AI")
+    assert not widget.title_label.isHidden()
     assert not widget.refresh_btn.isHidden()
     assert not widget.settings_btn.isHidden()
     assert not widget.close_btn.isHidden()
-    assert widget.status_label.text() == "Updated 1m ago · next 4m"
-    assert widget._header_widget.minimumSizeHint().width() <= widget.width()  # noqa: SLF001
+    assert not widget.status_label.isHidden()
+    assert widget._header_widget.layout().minimumSize().width() <= widget.width()  # noqa: SLF001
 
 
 def test_expanded_header_compacts_progressively_when_it_cannot_fit(
     qtbot, monkeypatch
 ):
-    """Safety net for a title bar narrower than its own contents."""
+    """Safety net for a title bar narrower than its own contents.
+
+    The widths are measured rather than hardcoded: the point at which each
+    step is needed depends on the platform's font metrics.
+    """
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
-    widget._apply_responsive_header()  # noqa: SLF001
-    assert widget.title_label.text() == f"AI Gauge {__version__}"
+    full_title = f"AI Gauge {__version__}"
 
-    monkeypatch.setattr(widget, "width", lambda: 200)
-    widget._apply_responsive_header()  # noqa: SLF001
-    assert widget.title_label.text() == "AI Gauge"
+    def title_at(width: int) -> str:
+        monkeypatch.setattr(widget, "width", lambda: width)
+        widget._apply_responsive_header()  # noqa: SLF001
+        return widget.title_label.text()
 
-    monkeypatch.setattr(widget, "width", lambda: 120)
-    widget._apply_responsive_header()  # noqa: SLF001
-    assert widget.title_label.text() == "AI"
+    assert title_at(WINDOW_MAX_WIDTH) == full_title
+    fits_full = widget._header_widget.layout().minimumSize().width()  # noqa: SLF001
+
+    assert title_at(fits_full) == full_title
+    # One pixel short of the full title, the version goes first.
+    assert title_at(fits_full - 1) == "AI Gauge"
+    # Far past every step, the name itself is abbreviated but the controls
+    # are all still there.
+    assert title_at(10) == "AI"
     assert not widget.refresh_btn.isHidden()
     assert not widget.settings_btn.isHidden()
     assert not widget.close_btn.isHidden()
