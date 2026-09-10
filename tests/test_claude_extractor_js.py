@@ -49,6 +49,12 @@ FABLE = "Fable Resets in 22 hr 0 min 4% used"
 IDLE_SESSION = "Current session Starts when a message is sent 0% used"
 IDLE_FABLE = "Fable You haven’t used Fable yet 0% used"
 LIVE_WEEKLY = "All models Resets Mon 5:59 PM 2% used"
+NEW_SESSION = "Current session Resets at 11:00 PM 12% used"
+NEW_WEEKLY = "This week Resets Monday 6:00 PM 77% used"
+NEW_FABLE = (
+    "Fable this week Separate weekly limit for Fable · "
+    "Resets Monday 6:00 PM 63% used"
+)
 # Real banner text from the Max-plan usage dialog. It names Fable but is not a
 # usage row, and it sits directly above the bars.
 BANNER = (
@@ -103,6 +109,39 @@ def test_max_plan_layout_reads_all_three_rows(tmp_path):
 
     assert percents(result) == {"session": 18, "weekly_all": 2, "weekly_fable": 4}
     assert result["weekly_fable"]["reset_text"] == "22 hr 0 min"
+
+
+def test_renamed_september_2026_usage_rows(tmp_path):
+    """Claude's new dialog calls the weekly rows This week/Fable this week."""
+    wrapper = " ".join(
+        [
+            "Your usage Max (5x)",
+            "Heads up. At this pace you’ll run out tomorrow evening.",
+            NEW_SESSION,
+            NEW_WEEKLY,
+            NEW_FABLE,
+            "Usage credits",
+        ]
+    )
+    result = run_extractor(
+        tmp_path,
+        [
+            (wrapper, 1100),
+            (NEW_SESSION, 60),
+            (NEW_WEEKLY, 60),
+            (NEW_FABLE, 90),
+        ],
+    )
+
+    assert percents(result) == {
+        "session": 12,
+        "weekly_all": 77,
+        "weekly_fable": 63,
+    }
+    assert result["session"]["reset_text"] == "at 11:00 PM"
+    assert result["weekly_all"]["reset_text"] == "Monday 6:00 PM"
+    assert result["weekly_fable"]["reset_text"] == "Monday 6:00 PM"
+    assert "__retry_after_ms" not in result
 
 
 def test_fable_banner_without_a_fable_row_is_not_read_as_a_row(tmp_path):

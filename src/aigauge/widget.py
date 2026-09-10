@@ -1609,8 +1609,8 @@ class UsageWidget(QWidget):
 
         # Header bar
         self.title_icon = QLabel()
-        self.title_icon.setPixmap(app_icon().pixmap(16, 16))
-        self.title_icon.setFixedSize(16, 16)
+        self.title_icon.setPixmap(app_icon().pixmap(24, 24))
+        self.title_icon.setFixedSize(24, 24)
         self.title_icon.setToolTip("AI Gauge")
 
         self.title_label = QLabel(f"AI Gauge {__version__}")
@@ -1702,8 +1702,8 @@ class UsageWidget(QWidget):
         self._collapsed_title = collapsed_title
         collapsed_title.setStyleSheet("color:#9ca3af; font-size:10px; font-weight:600;")
         self._collapsed_title_icon = QLabel()
-        self._collapsed_title_icon.setPixmap(app_icon().pixmap(14, 14))
-        self._collapsed_title_icon.setFixedSize(14, 14)
+        self._collapsed_title_icon.setPixmap(app_icon().pixmap(18, 18))
+        self._collapsed_title_icon.setFixedSize(18, 18)
         self._collapsed_title_icon.setToolTip("AI Gauge")
         collapsed_header.addWidget(self._collapsed_title_icon)
         collapsed_header.addWidget(collapsed_title)

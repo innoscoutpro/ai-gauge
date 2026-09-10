@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.7.7 - 2026-09-10
+
+### Changed
+
+- Promoted the AI Gauge artwork from a tiny window-chrome detail to a visible part of the app's identity. The full and compact panel marks are larger, Settings now opens with a 56px branded header and version tagline, and the README presents the icon as its public-facing hero artwork.
+
+### Fixed
+
+- Restored Claude usage refreshes after Claude renamed **Plan usage limits** to **Your usage**, **All models** to **This week**, and **Fable** to **Fable this week**. The extractor accepts both the old and new labels, including the new Fable subtitle and reset-time wording, so accounts on either side of the rollout continue to report Session, Weekly, and Fable usage instead of timing out while waiting for the old rows.
+
 ## 0.7.6 - 2026-08-26
 
 ### Changed

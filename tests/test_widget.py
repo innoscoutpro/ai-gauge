@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 import pytest
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QPoint, QSize, Qt
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
@@ -248,6 +248,8 @@ def test_title_bars_offer_distinct_view_and_hide_controls(qtbot):
 
     assert not widget.title_icon.pixmap().isNull()
     assert not widget._collapsed_title_icon.pixmap().isNull()  # noqa: SLF001
+    assert widget.title_icon.size() == QSize(24, 24)
+    assert widget._collapsed_title_icon.size() == QSize(18, 18)  # noqa: SLF001
     assert widget.collapse_btn.text() == "▾"
     assert widget.collapse_btn.toolTip() == "Switch to compact view"
     assert widget.hide_btn.text() == "—"

@@ -1,9 +1,17 @@
-# AI Gauge
+<p align="center">
+  <img src="src/aigauge/assets/aigaugeicon.png" alt="AI Gauge app icon" width="180" />
+</p>
 
-[![test](https://github.com/jpajak/ai-gauge/actions/workflows/test.yml/badge.svg)](https://github.com/jpajak/ai-gauge/actions/workflows/test.yml)
-![Windows / macOS / Linux](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d4)
-![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)
-![License: MIT](https://img.shields.io/badge/license-MIT-green)
+<h1 align="center">AI Gauge</h1>
+
+<p align="center"><strong>Know your AI usage at a glance.</strong></p>
+
+<p align="center">
+  <a href="https://github.com/jpajak/ai-gauge/actions/workflows/test.yml"><img src="https://github.com/jpajak/ai-gauge/actions/workflows/test.yml/badge.svg" alt="Test status" /></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d4" alt="Windows, macOS, and Linux" />
+  <img src="https://img.shields.io/badge/python-3.11%2B-3776ab" alt="Python 3.11+" />
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license" />
+</p>
 
 If you pay for multiple AI subscriptions and frequently check your usage, AI Gauge might help. It shows available rolling, session, weekly, and monthly usage, reset times, account balances, and spend in a compact always-visible view, so you can get the most out of what you're paying for.
 
@@ -14,7 +22,7 @@ Compact monitor for **Claude.ai**, **ChatGPT Codex**, **OpenCode**, **GitHub Cop
 
 > **Requires Python 3.11+.** Secrets live in the OS-native credential store (Windows Credential Manager / DPAPI, macOS Keychain, Linux Secret Service). Auto-start uses the platform's standard mechanism (Windows Task Scheduler / LaunchAgent / `~/.config/autostart`).
 
-Current version: **0.7.6**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current version: **0.7.7**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 AI Gauge is an independent open-source project and unofficial local desktop
 utility. It is not affiliated with Anthropic, OpenAI, GitHub, Microsoft,

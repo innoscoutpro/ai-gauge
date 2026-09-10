@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from . import __version__
 from .config import (
     BrowserAccount,
     ColorThresholds,
@@ -51,6 +52,7 @@ from .config import (
     set_openrouter_mgmt_key,
 )
 from .error_dialog import reveal_path
+from .icons import app_icon
 from .logging_setup import log_path
 from .providers.claude import CLAUDE_USAGE_URL
 from .providers.codex import CODEX_USAGE_URL
@@ -1135,6 +1137,42 @@ class SettingsDialog(QDialog):
         tabs.addTab(mcp_tab, "MCP")
         tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
+        # ----- Brand header -----
+        # Settings is the roomiest recurring surface in the app, so it can
+        # show the detailed application artwork at a size where the gauge
+        # remains recognizable instead of reducing it to window-chrome scale.
+        self.brand_icon = QLabel()
+        self.brand_icon.setObjectName("brand_icon")
+        self.brand_icon.setPixmap(app_icon().pixmap(56, 56))
+        self.brand_icon.setFixedSize(56, 56)
+        self.brand_icon.setToolTip("AI Gauge")
+
+        self.brand_title = QLabel("AI Gauge")
+        self.brand_title.setObjectName("brand_title")
+        self.brand_title.setStyleSheet(
+            "color:#f9fafb; font-size:22px; font-weight:700;"
+        )
+        self.brand_subtitle = QLabel(
+            f"Your AI usage at a glance  ·  Version {__version__}"
+        )
+        self.brand_subtitle.setObjectName("brand_subtitle")
+        self.brand_subtitle.setStyleSheet("color:#9ca3af; font-size:11px;")
+
+        brand_text = QVBoxLayout()
+        brand_text.setContentsMargins(0, 2, 0, 2)
+        brand_text.setSpacing(2)
+        brand_text.addStretch(1)
+        brand_text.addWidget(self.brand_title)
+        brand_text.addWidget(self.brand_subtitle)
+        brand_text.addStretch(1)
+
+        brand_header = QHBoxLayout()
+        brand_header.setContentsMargins(4, 0, 4, 0)
+        brand_header.setSpacing(12)
+        brand_header.addWidget(self.brand_icon)
+        brand_header.addLayout(brand_text)
+        brand_header.addStretch(1)
+
         # ----- Buttons -----
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -1156,6 +1194,7 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 10)
         layout.setSpacing(10)
+        layout.addLayout(brand_header)
         layout.addWidget(tabs, 1)
         layout.addLayout(button_row)
 

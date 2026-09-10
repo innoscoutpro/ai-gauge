@@ -37,11 +37,13 @@ log = logging.getLogger("aigauge.providers.claude")
 # any percent text elsewhere in the shell.
 EXTRACTOR_JS = r"""
 (() => {
-  const ROW_LABELS = [
-    'Current session',
-    'All models',
-    'Fable',
-    'Daily included routine runs'
+  const ROW_LABEL_GROUPS = [
+    ['Current session'],
+    // Claude renamed these rows in September 2026. Keep the old labels for
+    // accounts that have not received the new usage-dialog rollout yet.
+    ['All models', 'This week'],
+    ['Fable this week', 'Fable'],
+    ['Daily included routine runs']
   ];
 
   function norm(el) {
@@ -84,6 +86,7 @@ EXTRACTOR_JS = r"""
     return labelTailMatches(text, label, (after) => {
       const tail = withoutVersion(after);
       return isIdleRowTail(after) ||
+        /^separate\s+weekly\s+limit\s+for\s+fable\b.*\bresets?\b/i.test(tail) ||
         /^(?:resets?\b|\d+(?:\.\d+)?\s*%|used\b|remaining\b|$)/i.test(tail);
     });
   }
@@ -92,18 +95,24 @@ EXTRACTOR_JS = r"""
     return labelTailMatches(text, label, isIdleRowTail);
   }
 
-  function findRowByLabel(label) {
+  function findRowByLabels(labels) {
     const candidates = Array.from(document.querySelectorAll('div, section, li'));
     let best = null;
     let bestScore = Infinity;
     for (const el of candidates) {
       const t = norm(el);
-      if (!t.toLowerCase().includes(label.toLowerCase())) continue;
-      if (!/%/.test(t) && !hasIdleRowCopy(t, label)) continue;
-      if (!headsARow(t, label)) continue;
+      const label = labels.find(candidate =>
+        t.toLowerCase().includes(candidate.toLowerCase()) &&
+        (/%/.test(t) || hasIdleRowCopy(t, candidate)) &&
+        headsARow(t, candidate)
+      );
+      if (!label) continue;
       let score = t.length;
-      for (const other of ROW_LABELS) {
-        if (other !== label && t.toLowerCase().includes(other.toLowerCase())) {
+      for (const otherGroup of ROW_LABEL_GROUPS) {
+        if (otherGroup === labels) continue;
+        if (otherGroup.some(other =>
+          t.toLowerCase().includes(other.toLowerCase())
+        )) {
           score += 10000;
         }
       }
@@ -118,13 +127,13 @@ EXTRACTOR_JS = r"""
     return best;
   }
 
-  function readRow(label) {
-    const row = findRowByLabel(label);
+  function readRow(labels) {
+    const row = findRowByLabels(labels);
     if (!row) return null;
     const text = norm(row);
     const pctMatches = Array.from(text.matchAll(/(\d+(?:\.\d+)?)\s*%/g));
     const pctMatch = pctMatches[pctMatches.length - 1];
-    const idle = hasIdleRowCopy(text, label);
+    const idle = labels.some(label => hasIdleRowCopy(text, label));
     const remaining = /remaining/i.test(text);
     const used = /used/i.test(text);
     const resetMatch = text.match(/Resets?\s+(?:in\s+)?(.+?)(?=\s*$|\s+(?:Daily|Weekly|All|Current|Claude|Fable|You)\b|\s*\d+%)/i);
@@ -141,13 +150,13 @@ EXTRACTOR_JS = r"""
   const bodyText = (document.body.textContent || '').replace(/\s+/g, ' ').trim();
   const isLoggedOut =
     !!document.querySelector('a[href*="/login"]') &&
-    !bodyText.includes('Plan usage limits');
+    !/Plan usage limits|Your usage/i.test(bodyText);
 
-  const session = readRow('Current session');
-  const weeklyAll = readRow('All models');
+  const session = readRow(ROW_LABEL_GROUPS[0]);
+  const weeklyAll = readRow(ROW_LABEL_GROUPS[1]);
   // Max-plan accounts only. Never gate readiness on this row — Pro/Free
   // accounts have no Fable row and would retry until timeout.
-  const weeklyFable = readRow('Fable');
+  const weeklyFable = readRow(ROW_LABEL_GROUPS[2]);
 
   function onUsageRoute() {
     return /\/settings\/usage/.test(location.pathname) ||
@@ -157,7 +166,7 @@ EXTRACTOR_JS = r"""
   function ensureUsageRoute() {
     if (onUsageRoute()) return null;
     if (location.hostname !== 'claude.ai') return null;
-    if (/Plan usage limits|Current session|All models/i.test(bodyText)) return null;
+    if (/Plan usage limits|Your usage|Current session|All models|This week/i.test(bodyText)) return null;
     location.href = '/new#settings/usage';
     return 'opened usage dialog';
   }
@@ -180,10 +189,10 @@ EXTRACTOR_JS = r"""
   // The current Claude UI opens usage as a shell/dialog route. Percent text
   // elsewhere in the shell is not enough; wait for the Session/Weekly rows
   // or for the explicit idle-zero usage panel before handing data to Python.
-  const usagePanelSignals = /Plan usage limits|Current session|All models/i.test(bodyText);
-  const idleUsagePanel = /Plan usage limits/i.test(bodyText) &&
+  const usagePanelSignals = /Plan usage limits|Your usage|Current session|All models|This week/i.test(bodyText);
+  const idleUsagePanel = /Plan usage limits|Your usage/i.test(bodyText) &&
     /Current session/i.test(bodyText) &&
-    /All models/i.test(bodyText) &&
+    /All models|This week/i.test(bodyText) &&
     !/%/.test(bodyText);
   const requiredRowsReady = !!session && !!weeklyAll;
   if (!isLoggedOut && (onUsageRoute() || usagePanelSignals) && !requiredRowsReady && !idleUsagePanel) {
@@ -230,7 +239,7 @@ def _looks_like_empty_signed_in_usage(payload: dict[str, Any]) -> bool:
     # Require positive evidence the usage panel actually rendered. Without
     # this, a partially-loaded page (sidebar only, main pane still fetching)
     # gets misclassified as idle and shown as 0/0.
-    if "plan usage limits" not in body:
+    if "plan usage limits" not in body and "your usage" not in body:
         return False
     # If percent text is on the page but the row extractor missed it, that's
     # a layout change — not idle.

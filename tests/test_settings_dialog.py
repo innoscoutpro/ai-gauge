@@ -11,6 +11,18 @@ def _button(dialog: SettingsDialog, name: str) -> QPushButton:
     return button
 
 
+def test_brand_header_showcases_app_identity(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    assert not dialog.brand_icon.pixmap().isNull()
+    assert dialog.brand_icon.width() == 56
+    assert dialog.brand_icon.height() == 56
+    assert dialog.brand_title.text() == "AI Gauge"
+    assert "usage at a glance" in dialog.brand_subtitle.text()
+    assert settings_dialog.__version__ in dialog.brand_subtitle.text()
+
+
 def test_sign_in_button_emits_sign_in_signal(qtbot):
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
