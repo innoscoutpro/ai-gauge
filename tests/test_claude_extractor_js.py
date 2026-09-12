@@ -47,6 +47,7 @@ SESSION = "Current session Resets in 3 hr 10 min 18% used"
 ALL_MODELS = "All models Resets in 22 hr 0 min 2% used"
 FABLE = "Fable Resets in 22 hr 0 min 4% used"
 IDLE_SESSION = "Current session Starts when a message is sent 0% used"
+NEW_IDLE_SESSION = "Current session Starts with your first message 0% used"
 IDLE_FABLE = "Fable You haven’t used Fable yet 0% used"
 LIVE_WEEKLY = "All models Resets Mon 5:59 PM 2% used"
 NEW_SESSION = "Current session Resets at 11:00 PM 12% used"
@@ -228,6 +229,37 @@ def test_current_claude_idle_session_layout_reports_mixed_usage(tmp_path):
     assert result["session"]["reset_text"] is None
     assert result["weekly_all"]["reset_text"] == "Mon 5:59 PM"
     assert result["weekly_fable"]["reset_text"] is None
+    assert "__retry_after_ms" not in result
+
+
+def test_september_2026_idle_session_copy_is_ready_and_reports_zero(tmp_path):
+    """The idle session row has no reset time but is fully hydrated."""
+    wrapper = " ".join(
+        [
+            "Your usage Max (5x)",
+            NEW_IDLE_SESSION,
+            NEW_WEEKLY,
+            NEW_FABLE,
+            "Usage credits",
+        ]
+    )
+    result = run_extractor(
+        tmp_path,
+        [
+            (wrapper, 1100),
+            (NEW_IDLE_SESSION, 80),
+            (NEW_WEEKLY, 60),
+            (NEW_FABLE, 90),
+        ],
+    )
+
+    assert percents(result) == {
+        "session": 0,
+        "weekly_all": 77,
+        "weekly_fable": 63,
+    }
+    assert result["session"]["reset_text"] is None
+    assert result["session"]["kind"] == "used"
     assert "__retry_after_ms" not in result
 
 

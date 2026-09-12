@@ -413,29 +413,6 @@ def _build_snapshot(
             raw=payload,
         )
 
-    session_metric = labels.get("session")
-    weekly_metric = labels.get("weekly")
-    if (
-        session_metric is not None
-        and weekly_metric is not None
-        and (session_metric.percent_used or 0) > 0
-        and weekly_metric.percent_used == 0
-        and weekly_metric.reset_label == "idle"
-    ):
-        log_page_diagnosis(
-            log,
-            provider=account_id,
-            classification="mixed_session_weekly_idle",
-            payload=payload,
-            expected_rows=_EXPECTED_ROWS,
-            level=logging.WARNING,
-        )
-        return UsageSnapshot(
-            provider=account_id,
-            status=SnapshotStatus.ERROR,
-            error="Codex usage page rendered an active session with an idle weekly card; retrying.",
-            raw=payload,
-        )
     if not metrics or all(m.percent_used is None for m in metrics):
         if _looks_like_empty_signed_in_usage(payload):
             log_page_diagnosis(

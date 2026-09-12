@@ -79,6 +79,7 @@ EXTRACTOR_JS = r"""
     const tail = withoutVersion(after);
     return /^resets?\s+when\b/i.test(tail) ||
       /^starts\s+when\b.*\bmessage\b/i.test(tail) ||
+      /^starts\s+with\b.*\b(?:first\s+)?message\b/i.test(tail) ||
       /^you\s+haven['’]t\s+used\b.*\byet\b/i.test(tail);
   }
 

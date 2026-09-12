@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.7.8 - 2026-09-12
+
+### Fixed
+
+- Restored Claude refreshes before a five-hour session has started after the usage dialog changed its idle copy from **Starts when a message is sent** to **Starts with your first message**. The new wording is recognized as a fully loaded `0%` Session row, so active Weekly and Fable values are reported instead of leaving the previous snapshot stale after a timeout.
+- Stopped Codex rejecting a valid unused weekly limit when the five-hour session already has usage. A Weekly card showing **100% remaining** without a reset time is now accepted alongside an active Session card instead of being mistaken for a partial render, retried, and ultimately shown as an error with stale cached values.
+
 ## 0.7.7 - 2026-09-10
 
 ### Changed

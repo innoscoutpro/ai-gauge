@@ -250,14 +250,14 @@ def test_codex_extractor_stops_waiting_when_weekly_card_is_ready():
     assert ",div,span,p" not in personal_usage_logic
 
 
-def test_codex_active_session_with_idle_weekly_is_transient_error():
+def test_codex_active_session_with_unused_weekly_limit_is_valid():
     snapshot = _build_snapshot(
         {
             "logged_out": False,
             "session": {
-                "percent": 99,
+                "percent": 98,
                 "kind": "remaining",
-                "reset_text": "4 hr 59 min",
+                "reset_text": "1:34 PM",
             },
             "weekly": {
                 "percent": 100,
@@ -266,12 +266,22 @@ def test_codex_active_session_with_idle_weekly_is_transient_error():
             },
             "title": "Codex",
             "url": CODEX_USAGE_URL,
-            "body_text": "5 hour usage limit 99% remaining Weekly usage limit 100% remaining",
+            "body_text": (
+                "Balance Codex and Work share the same usage limit. "
+                "5 hour usage limit 98% remaining Resets 1:34 PM "
+                "Weekly usage limit 100% remaining"
+            ),
         }
     )
 
-    assert snapshot.status == SnapshotStatus.ERROR
-    assert "active session with an idle weekly card" in (snapshot.error or "")
+    assert snapshot.status == SnapshotStatus.OK
+    assert [
+        (metric.label, metric.percent_used, metric.reset_label)
+        for metric in snapshot.metrics
+    ] == [
+        ("Session", 2.0, None),
+        ("Weekly", 0.0, "idle"),
+    ]
 
 def test_codex_usage_signal_prevents_false_idle_fallback():
     snapshot = _build_snapshot(
