@@ -183,6 +183,7 @@ def test_model_table_leads_with_cost_and_share(qtbot, service):
     assert [tab.model_table.horizontalHeaderItem(i).text() for i in range(6)] == [
         "Model", "Est. cost", "Share of cost", "Output", "Share of output", "Msgs",
     ]
+    assert not tab.model_table.horizontalHeader().stretchLastSection()
     # opus 936 of 1136 output tokens
     assert rows[0][4] == "82%"
     assert rows[0][5] == "3"
@@ -211,6 +212,21 @@ def test_range_selector_defaults_to_this_week_and_covers_all_ranges(qtbot, servi
     for key, _label in RANGES:
         _select_range(tab, key)
         assert _model_rows(tab)[0][0] == "● claude-opus-5"
+
+
+def test_view_and_range_choices_are_remembered(qtbot, service):
+    service.run_sync()
+    tab = _tab(qtbot, service, snapshot=_claude_snapshot())
+
+    tab.show_view("day")
+    _select_range(tab, "30d")
+
+    reopened = _tab(qtbot, service, snapshot=_claude_snapshot())
+    assert reopened.current_view() == "day"
+    assert reopened.range_combo.currentData() == "30d"
+    saved = Config.load().local_usage
+    assert saved.details_view == "day"
+    assert saved.details_range == "30d"
 
 
 def test_unpriced_models_show_no_price_and_sort_last(qtbot, service):

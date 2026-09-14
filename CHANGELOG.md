@@ -15,6 +15,7 @@
 ### Changed
 
 - Made **Usage and cost** the default page of usage details when local tracking is enabled. **Session vs weekly** remains available as the secondary tab, and remains the only view when local tracking is off.
+- Kept wide model-table columns compact and remembered the last selected view and range.
 
 ### Fixed
 

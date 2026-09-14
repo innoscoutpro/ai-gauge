@@ -199,6 +199,8 @@ class LocalUsageConfig(BaseModel):
     enabled: bool = False
     claude: LocalUsageProviderConfig = Field(default_factory=LocalUsageProviderConfig)
     codex: LocalUsageProviderConfig = Field(default_factory=LocalUsageProviderConfig)
+    details_view: Literal["model", "day", "trend"] = "model"
+    details_range: Literal["week", "session", "today", "7d", "30d"] = "week"
 
 
 class Config(BaseModel):

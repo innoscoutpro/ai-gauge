@@ -577,7 +577,7 @@ class UsageCostTab(QWidget):
         self._day_filter: date | None = None
         self._daily_days: list[date] = []
         self._model_colors: dict[str, str] = {}
-        self._view = VIEW_MODEL
+        self._view = self._service.config.local_usage.details_view
         self._trend_metric = SESSION
         self._trend_show_all = False
         self._trend_skipped_open = False
@@ -621,7 +621,7 @@ class UsageCostTab(QWidget):
         root.addLayout(self._build_footer())
 
         self._connect()
-        self.show_view(VIEW_MODEL)
+        self.show_view(self._view)
         self.refresh()
 
     # ---- building ----
@@ -654,6 +654,9 @@ class UsageCostTab(QWidget):
         self.range_combo.setObjectName("usage_range_combo")
         for key, label in RANGES:
             self.range_combo.addItem(label, key)
+        saved_range = self._service.config.local_usage.details_range
+        saved_index = self.range_combo.findData(saved_range)
+        self.range_combo.setCurrentIndex(max(0, saved_index))
         self.range_combo.currentIndexChanged.connect(self._on_range_changed)
         bar.addWidget(self.range_combo)
         self._trend_metric_bar = QWidget()
@@ -691,6 +694,9 @@ class UsageCostTab(QWidget):
         layout.setSpacing(6)
         self.model_table = _table([title for _key, title, _details in MODEL_COLUMNS])
         self.model_table.setObjectName("usage_model_table")
+        # Keep the compact numeric columns together; unused width belongs
+        # after the table rather than inside the final Messages column.
+        self.model_table.horizontalHeader().setStretchLastSection(False)
         layout.addWidget(self.model_table)
         row = QHBoxLayout()
         row.addStretch(1)
@@ -822,6 +828,7 @@ class UsageCostTab(QWidget):
     # ---- views ----
 
     def show_view(self, key: str) -> None:
+        changed = key != self._view
         self._view = key
         self.view_buttons[key].setChecked(True)
         for page_key, page in self.pages.items():
@@ -830,6 +837,8 @@ class UsageCostTab(QWidget):
         self.day_chip.setHidden(key != VIEW_MODEL or self._day_filter is None)
         self._trend_metric_bar.setHidden(key != VIEW_TREND)
         self.limit_changes_btn.setHidden(key != VIEW_TREND)
+        if changed:
+            self._remember_display_choice("details_view", key)
 
     def current_view(self) -> str:
         return self._view
@@ -1273,6 +1282,9 @@ class UsageCostTab(QWidget):
 
     def _on_range_changed(self, _index: int) -> None:
         self._day_filter = None
+        key = self.range_combo.currentData()
+        if isinstance(key, str):
+            self._remember_display_choice("details_range", key)
         self.refresh()
 
     def _on_day_clicked(self, row: int, _column: int) -> None:
@@ -1280,12 +1292,22 @@ class UsageCostTab(QWidget):
             return
         self._day_filter = self._daily_days[row]
         self.day_chip.setText(f"{self._day_filter:%b %d}  ✕")
-        self._view = VIEW_MODEL
+        self.show_view(VIEW_MODEL)
         self.refresh()
 
     def _clear_day_filter(self) -> None:
         self._day_filter = None
         self.refresh()
+
+    def _remember_display_choice(self, name: str, value: str) -> None:
+        settings = self._service.config.local_usage
+        if getattr(settings, name) == value:
+            return
+        setattr(settings, name, value)
+        try:
+            self._service.config.save()
+        except OSError:
+            pass
 
     def _sync_import_status(self, running: bool) -> None:
         self.cancel_btn.setHidden(not running)
