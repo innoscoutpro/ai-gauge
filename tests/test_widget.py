@@ -1484,7 +1484,7 @@ def test_collapsed_header_sheds_detail_as_the_pill_narrows(qtbot):
     widget.update_snapshot(_ok_snapshot("codex"), "Codex")
     widget.set_collapsed(True)
 
-    assert "0.7" in widget._collapsed_title.text()  # noqa: SLF001
+    assert __version__ in widget._collapsed_title.text()  # noqa: SLF001
 
     widget.resize(widget.minimumWidth(), widget.height())
     widget._on_resize_finished()  # noqa: SLF001

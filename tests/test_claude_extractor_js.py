@@ -48,6 +48,7 @@ ALL_MODELS = "All models Resets in 22 hr 0 min 2% used"
 FABLE = "Fable Resets in 22 hr 0 min 4% used"
 IDLE_SESSION = "Current session Starts when a message is sent 0% used"
 NEW_IDLE_SESSION = "Current session Starts with your first message 0% used"
+PAUSED_SESSION = "Current session Paused until your week resets 8% used"
 IDLE_FABLE = "Fable You haven’t used Fable yet 0% used"
 LIVE_WEEKLY = "All models Resets Mon 5:59 PM 2% used"
 NEW_SESSION = "Current session Resets at 11:00 PM 12% used"
@@ -260,6 +261,83 @@ def test_september_2026_idle_session_copy_is_ready_and_reports_zero(tmp_path):
     }
     assert result["session"]["reset_text"] is None
     assert result["session"]["kind"] == "used"
+    assert "__retry_after_ms" not in result
+
+
+def test_weekly_cap_pauses_session_without_making_the_dialog_look_incomplete(tmp_path):
+    """A capped account keeps its Session percentage but replaces its reset copy."""
+    capped_weekly = "This week Resets at 6:00 PM 100% used"
+    live_fable = (
+        "Fable this week Separate weekly limit for Fable · "
+        "Resets at 6:00 PM 76% used"
+    )
+    wrapper = " ".join(
+        [
+            "Your usage Max (5x)",
+            "Limit hit. You can send new messages when your week resets.",
+            PAUSED_SESSION,
+            capped_weekly,
+            live_fable,
+            "Usage credits",
+        ]
+    )
+
+    result = run_extractor(
+        tmp_path,
+        [(wrapper, 1100), (PAUSED_SESSION, 80), (capped_weekly, 60), (live_fable, 90)],
+    )
+
+    assert percents(result) == {
+        "session": 8,
+        "weekly_all": 100,
+        "weekly_fable": 76,
+    }
+    assert result["session"]["reset_text"] == "Paused until your week resets"
+    assert "__retry_after_ms" not in result
+
+
+def test_status_wording_can_change_when_rows_only_share_a_wrapper(tmp_path):
+    """Labels and values, rather than exact prose, define a hydrated row."""
+    session = "Current session Temporarily unavailable until allowance renewal 8% used"
+    weekly = "This week Your plan renews Monday evening 100% used"
+
+    result = run_extractor(tmp_path, [(f"Your usage {session} {weekly}", 400)])
+
+    assert percents(result) == {
+        "session": 8,
+        "weekly_all": 100,
+        "weekly_fable": None,
+    }
+    assert "__retry_after_ms" not in result
+
+
+def test_nested_label_only_elements_do_not_beat_rows_with_values(tmp_path):
+    """Claude renders headings separately inside the complete usage rows."""
+    capped_weekly = "This week Resets at 6:00 PM 100% used"
+    live_fable = (
+        "Fable this week Separate weekly limit for Fable · "
+        "Resets at 6:00 PM 76% used"
+    )
+    wrapper = " ".join(["Your usage", PAUSED_SESSION, capped_weekly, live_fable])
+
+    result = run_extractor(
+        tmp_path,
+        [
+            (wrapper, 900),
+            ("Current session", 20),
+            (PAUSED_SESSION, 80),
+            ("This week", 20),
+            (capped_weekly, 60),
+            ("Fable this week", 20),
+            (live_fable, 90),
+        ],
+    )
+
+    assert percents(result) == {
+        "session": 8,
+        "weekly_all": 100,
+        "weekly_fable": 76,
+    }
     assert "__retry_after_ms" not in result
 
 

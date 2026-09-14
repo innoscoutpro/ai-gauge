@@ -12,6 +12,7 @@ from aigauge.local_usage.claude_logs import ClaudeMessage
 from aigauge.local_usage.codex_logs import CodexQuotaReading
 from aigauge.local_usage.rates import load_rate_table
 from aigauge.local_usage.service import LocalUsageService
+from aigauge.local_usage.summaries import WindowSummary, save_summary
 from aigauge.local_usage.tokens import TokenCounts
 from aigauge.local_usage.usage_tab import (
     RANGES,
@@ -23,6 +24,7 @@ from aigauge.local_usage.usage_tab import (
 from aigauge.local_usage.windows import (
     claude_windows_from_snapshot,
     codex_windows_from_readings,
+    current_windows,
 )
 from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
 from aigauge.ratio_dialog import RatioHistoryDialog
@@ -112,13 +114,13 @@ def test_dialog_without_usage_tab_is_unchanged(qtbot):
     assert "session vs weekly" in dialog.windowTitle()
 
 
-def test_dialog_opens_on_ratio_tab_unless_asked_for_usage(qtbot, service):
-    ratio_first = RatioHistoryDialog(
+def test_dialog_opens_on_usage_tab_by_default(qtbot, service):
+    usage_first = RatioHistoryDialog(
         "claude", "Claude", [], current_estimate=None, usage_tab=_tab(qtbot, service)
     )
-    usage_first = RatioHistoryDialog(
+    ratio_first = RatioHistoryDialog(
         "claude", "Claude", [], current_estimate=None,
-        usage_tab=_tab(qtbot, service), open_usage_tab=True,
+        usage_tab=_tab(qtbot, service), open_usage_tab=False,
     )
     qtbot.addWidget(ratio_first)
     qtbot.addWidget(usage_first)
@@ -297,6 +299,55 @@ def test_claude_window_starts_at_resets_minus_window():
     assert windows["Fable"].start == datetime(2026, 9, 7, 0, 0, tzinfo=UTC)
     assert windows["Fable"].model_filter == "fable"
     assert windows["Session"].model_filter is None
+
+
+def test_claude_current_windows_fall_back_to_persisted_open_summaries(service):
+    session_reset = NOW + timedelta(hours=1)
+    weekly_reset = NOW + timedelta(hours=4)
+    for metric, reset, pct, window in (
+        ("Session", session_reset, 8.0, timedelta(hours=5)),
+        ("Weekly", weekly_reset, 100.0, timedelta(days=7)),
+    ):
+        save_summary(
+            service.store,
+            WindowSummary(
+                account_id="claude",
+                metric=metric,
+                window_start=reset - window,
+                resets_at=reset,
+                last_reading_at=NOW - timedelta(minutes=5),
+                last_pct=pct,
+                usage=[],
+                origin="live",
+                closed=False,
+            ),
+        )
+    fable_reset = _local_naive(weekly_reset)
+    snapshot = UsageSnapshot(
+        provider="claude",
+        status=SnapshotStatus.OK,
+        metrics=[
+            UsageMetric(
+                "Session",
+                8.0,
+                resets_at=None,
+                note="Paused until your week resets",
+                window=timedelta(hours=5),
+            ),
+            UsageMetric("Fable", 76.0, resets_at=fable_reset, window=timedelta(days=7)),
+        ],
+        fetched_at=_local_naive(NOW),
+    )
+
+    windows = current_windows(
+        "claude", snapshot, service.store, NOW, account_id="claude"
+    )
+
+    assert windows["Session"].pct == 8.0
+    assert windows["Session"].resets_at == session_reset
+    assert windows["Weekly"].pct == 100.0
+    assert windows["Weekly"].resets_at == weekly_reset
+    assert windows["Fable"].pct == 76.0
 
 
 def test_codex_windows_come_from_log_readings():

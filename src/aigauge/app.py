@@ -1013,7 +1013,7 @@ class App(QObject):
                 return metric.percent_used
         return None
 
-    def open_ratio_history(self, provider: str, show_usage: bool = False) -> None:
+    def open_ratio_history(self, provider: str, show_usage: bool = True) -> None:
         display_name = display_name_for_account(self._config, provider)
         usage_tab = None
         service = self._local_usage

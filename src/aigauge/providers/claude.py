@@ -83,17 +83,68 @@ EXTRACTOR_JS = r"""
       /^you\s+haven['’]t\s+used\b.*\byet\b/i.test(tail);
   }
 
+  function hasUsageValue(after) {
+    // The prose between a row label and its value changes fairly often. Treat
+    // the percentage as the stable signal instead of enumerating every status
+    // sentence (for example "Paused until your week resets"). rowText() below
+    // keeps the match inside this row, so a neighbouring percentage cannot
+    // make an otherwise unrelated label look valid.
+    return /\d+(?:\.\d+)?\s*%(?:\s*(?:used|remaining))?/i.test(after) ||
+      /\b(?:used|remaining)\s*:?\s*\d+(?:\.\d+)?\s*%/i.test(after);
+  }
+
   function headsARow(text, label) {
     return labelTailMatches(text, label, (after) => {
       const tail = withoutVersion(after);
-      return isIdleRowTail(after) ||
-        /^separate\s+weekly\s+limit\s+for\s+fable\b.*\bresets?\b/i.test(tail) ||
-        /^(?:resets?\b|\d+(?:\.\d+)?\s*%|used\b|remaining\b|$)/i.test(tail);
+      // A standalone label or reset caption is not a hydrated row. The value
+      // may live in a parent element, which will be considered separately.
+      return isIdleRowTail(after) || hasUsageValue(tail);
     });
   }
 
   function hasIdleRowCopy(text, label) {
     return labelTailMatches(text, label, isIdleRowTail);
+  }
+
+  function isEmbeddedLabel(text, index, label) {
+    // "This week" is also part of the distinct "Fable this week" label.
+    // Do not let the Fable row stand in for the all-model weekly row.
+    return label.toLowerCase() === 'this week' &&
+      text.slice(Math.max(0, index - 6), index).toLowerCase() === 'fable ';
+  }
+
+  function nextRowLabel(text, start) {
+    const lower = text.toLowerCase();
+    let end = text.length;
+    for (const group of ROW_LABEL_GROUPS) {
+      for (const label of group) {
+        let index = lower.indexOf(label.toLowerCase(), start);
+        while (index !== -1 && isEmbeddedLabel(text, index, label)) {
+          index = lower.indexOf(label.toLowerCase(), index + 1);
+        }
+        if (index !== -1 && index < end) end = index;
+      }
+    }
+    return end;
+  }
+
+  function rowText(text, labels) {
+    const lower = text.toLowerCase();
+    let best = null;
+    for (const label of labels) {
+      let index = lower.indexOf(label.toLowerCase());
+      while (index !== -1) {
+        if (!isEmbeddedLabel(text, index, label)) {
+          const afterLabel = index + label.length;
+          const candidate = text.slice(index, nextRowLabel(text, afterLabel)).trim();
+          if (headsARow(candidate, label) && (!best || candidate.length < best.length)) {
+            best = candidate;
+          }
+        }
+        index = lower.indexOf(label.toLowerCase(), index + 1);
+      }
+    }
+    return best;
   }
 
   function findRowByLabels(labels) {
@@ -102,26 +153,14 @@ EXTRACTOR_JS = r"""
     let bestScore = Infinity;
     for (const el of candidates) {
       const t = norm(el);
-      const label = labels.find(candidate =>
-        t.toLowerCase().includes(candidate.toLowerCase()) &&
-        (/%/.test(t) || hasIdleRowCopy(t, candidate)) &&
-        headsARow(t, candidate)
-      );
-      if (!label) continue;
-      let score = t.length;
-      for (const otherGroup of ROW_LABEL_GROUPS) {
-        if (otherGroup === labels) continue;
-        if (otherGroup.some(other =>
-          t.toLowerCase().includes(other.toLowerCase())
-        )) {
-          score += 10000;
-        }
-      }
+      const row = rowText(t, labels);
+      if (!row) continue;
+      let score = row.length;
       // Prefer actual row-ish containers over large sections or page wrappers.
       const rect = el.getBoundingClientRect();
       if (rect.height > 140) score += 5000;
       if (score < bestScore) {
-        best = el;
+        best = row;
         bestScore = score;
       }
     }
@@ -129,22 +168,24 @@ EXTRACTOR_JS = r"""
   }
 
   function readRow(labels) {
-    const row = findRowByLabels(labels);
-    if (!row) return null;
-    const text = norm(row);
+    const text = findRowByLabels(labels);
+    if (!text) return null;
     const pctMatches = Array.from(text.matchAll(/(\d+(?:\.\d+)?)\s*%/g));
     const pctMatch = pctMatches[pctMatches.length - 1];
     const idle = labels.some(label => hasIdleRowCopy(text, label));
     const remaining = /remaining/i.test(text);
     const used = /used/i.test(text);
     const resetMatch = text.match(/Resets?\s+(?:in\s+)?(.+?)(?=\s*$|\s+(?:Daily|Weekly|All|Current|Claude|Fable|You)\b|\s*\d+%)/i);
+    const pausedMatch = text.match(/\b((?:paused|unavailable|blocked)\b.+?\b(?:resets?|renews?))(?=\s*\d+%|\s*$)/i);
     return {
       raw: text.slice(0, 400),
       // The label-specific idle copy is more authoritative than a percentage
       // or "remaining" word inherited from a larger wrapper around other rows.
       percent: idle ? 0 : (pctMatch ? parseFloat(pctMatch[1]) : null),
       kind: idle ? 'used' : (remaining ? 'remaining' : (used ? 'used' : 'unknown')),
-      reset_text: resetMatch ? resetMatch[1].trim() : null,
+      // A paused sentence can itself contain "resets"; preserve the whole
+      // status instead of treating the words after that verb as a countdown.
+      reset_text: pausedMatch ? pausedMatch[1].trim() : (resetMatch ? resetMatch[1].trim() : null),
     };
   }
 

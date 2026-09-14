@@ -2,13 +2,24 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-14
+
 ### Added
 
 - Optional local usage tracking reads Claude Code and Codex logs on this computer to show API-equivalent cost next to the quota percentages. It is off by default and turned on in the new **Local usage** Settings tab. Design: [docs/local-usage-cost-plan.md](docs/local-usage-cost-plan.md).
 - **Import history** in that tab brings in the usage the logs still hold, without closing Settings. The import runs in the background, can be cancelled, and resumes where it stopped.
 - The usage details dialog gains a **Usage and cost** tab with cards for the current session, week and Fable limit (cost, allowance used, cost per 1%), and views by model, by day and over time.
-- A **Trend** view answers whether your allowance is going as far as usual: a plain-language verdict, a chart of cost per 1% over time, and a note when a different model or cache mix explains a change. Windows it can't compare fold into one line with their reasons. **Limits changed…** marks the date a provider changed its limits, so the comparison starts fresh from there.
+- A **Trend** view answers whether your allowance is going as far as usual: a plain-language verdict based on the median of the last five sessions (or the latest week), a chart of cost per 1% over time, and a note when a different model or cache mix explains a change. Windows it can't compare fold into one line with their reasons. **Limits changed…** marks the date a provider changed its limits, so the comparison starts fresh from there.
 - A **Usage details** menu entry opens the dialog before the session ratio has calibrated.
+
+### Changed
+
+- Made **Usage and cost** the default page of usage details when local tracking is enabled. **Session vs weekly** remains available as the secondary tab, and remains the only view when local tracking is off.
+
+### Fixed
+
+- Kept Claude usage refreshing after a weekly limit is reached. Row detection now uses labels and their associated values instead of depending on exact status sentences, so wording such as **Paused until your week resets** and similar minor copy changes no longer make the fully loaded usage dialog time out.
+- Kept the current Session and Weekly cards in **Usage and cost** when Claude temporarily omits a row or its reset time at the weekly cap. The dialog now falls back to the last persisted open window while preferring any fresh webpage reading.
 
 ## 0.7.8 - 2026-09-12
 

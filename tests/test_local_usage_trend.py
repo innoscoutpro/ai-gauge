@@ -207,3 +207,15 @@ def test_no_mix_warning_before_a_baseline_exists(rates):
     windows = [_window(1, 20), _window(2, 20, model="claude-opus-5")]
 
     assert mix_warnings(build_trend(windows, "Session", rates)) == []
+
+
+def test_recent_windows_use_their_median_against_the_windows_before(rates):
+    windows = [_window(i, 20) for i in range(1, 4)] + [_window(4, 10), _window(5, 40), _window(6, 10)]
+
+    report = build_trend(windows, "Session", rates, recent_windows=3)
+
+    # recent: $1.00, $0.25, $1.00 -> median $1.00 against a baseline of $0.50
+    assert report.recent_dollars_per_point == pytest.approx(1.0)
+    assert report.dollars_change == pytest.approx(1.0)
+    assert [r.summary for r in report.baseline_rows] == windows[2::-1]
+    assert report.compared_windows == 6

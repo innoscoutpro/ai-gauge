@@ -163,6 +163,46 @@ def test_claude_new_session_keeps_weekly_usage_and_marks_idle_rows():
     ]
 
 
+def test_claude_weekly_cap_keeps_all_visible_usage_rows():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": {
+                "percent": 8,
+                "kind": "used",
+                "reset_text": "Paused until your week resets",
+            },
+            "weekly_all": {
+                "percent": 100,
+                "kind": "used",
+                "reset_text": "at 6:00 PM",
+            },
+            "weekly_fable": {
+                "percent": 76,
+                "kind": "used",
+                "reset_text": "at 6:00 PM",
+            },
+            "title": "New chat - Claude",
+            "url": CLAUDE_USAGE_URL,
+            "body_text": (
+                "Your usage Current session Paused until your week resets 8% used "
+                "This week Resets at 6:00 PM 100% used "
+                "Fable this week Resets at 6:00 PM 76% used"
+            ),
+        },
+        show_fable=True,
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [(metric.label, metric.percent_used) for metric in snapshot.metrics] == [
+        ("Session", 8.0),
+        ("Weekly", 100.0),
+        ("Fable", 76.0),
+    ]
+    assert snapshot.metrics[0].resets_at is None
+    assert snapshot.metrics[0].note == "Paused until your week resets"
+
+
 def test_claude_legacy_usage_url_can_still_be_idle_zero():
     snapshot = _build_snapshot(
         {

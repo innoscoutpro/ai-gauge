@@ -128,6 +128,10 @@ TREND_BASIC_COLUMNS = 5
 TREND_RECENT_ROWS = 20
 TREND_CHART_POINTS = 60
 TREND_UNITS = {SESSION: ("session", "sessions"), WEEKLY: ("week", "weeks")}
+# Single sessions swing widely, so the answer uses the median of the last five
+# against the twenty before them. A week is already an aggregate.
+TREND_RECENT = {SESSION: 5, WEEKLY: 1}
+TREND_BASELINE = {SESSION: 20, WEEKLY: 8}
 # About the same as usual when within this share of the typical value.
 SAME_AS_USUAL = 0.10
 SHORT_REASONS = {
@@ -205,41 +209,39 @@ def trend_summary_lines(report: TrendReport, metric: str = SESSION) -> list[str]
     """The answer at the top of the Trend view, in plain words, headline first."""
     unit, units = TREND_UNITS.get(metric, ("window", "windows"))
     change_day = report.limit_change.astimezone().strftime("%b %d") if report.limit_change else None
-    current = report.current
-    if current is None:
+    if report.current is None:
         if change_day:
             return [f"No completed {units} since the limit change on {change_day} yet."]
         return [f"No completed {units} to compare yet."]
     if report.collecting:
-        needs = (
-            f"eeds {BASELINE_MIN_WINDOWS} earlier completed {units} to compare; "
-            f"{report.output_baseline.windows} so far."
-        )
+        needed = report.recent_windows + BASELINE_MIN_WINDOWS
+        needs = f"eeds {needed} completed {units} to compare; {report.compared_windows} so far."
         if change_day:
             return [f"Since the limit change on {change_day}: n{needs}"]
         return [f"N{needs}"]
     since = f" since the limit change on {change_day}" if change_day else ""
+    lead = f"Last {report.recent_windows} {units}" if report.recent_windows > 1 else f"Latest {unit}"
     dollars = report.dollars_baseline
     output = report.output_baseline
     lines = []
-    if report.dollars_change is not None and current.dollars_per_point is not None:
+    if report.dollars_change is not None and report.recent_dollars_per_point is not None:
         lines.append(
-            f"Latest {unit}: 1% of the limit covered about "
-            f"{format_cost(current.dollars_per_point)} of usage"
+            f"{lead}: 1% of the limit covered about "
+            f"{format_cost(report.recent_dollars_per_point)} of usage"
         )
         lines.append(
             f"{_verdict(report.dollars_change)} (typical {format_cost(dollars.median)}, "
             f"from {dollars.windows} earlier {units}{since})"
         )
-        if report.output_change is not None and current.output_per_point is not None:
+        if report.output_change is not None and report.recent_output_per_point is not None:
             lines.append(
-                f"Output per 1%: {format_tokens(current.output_per_point)}, "
+                f"Output per 1%: {format_tokens(report.recent_output_per_point)}, "
                 f"{_verdict(report.output_change).lower()}"
             )
-    elif report.output_change is not None and current.output_per_point is not None:
+    elif report.output_change is not None and report.recent_output_per_point is not None:
         lines.append(
-            f"Latest {unit}: 1% of the limit covered about "
-            f"{format_tokens(current.output_per_point)} output tokens"
+            f"{lead}: 1% of the limit covered about "
+            f"{format_tokens(report.recent_output_per_point)} output tokens"
         )
         lines.append(
             f"{_verdict(report.output_change)} (typical {format_tokens(output.median)}, "
@@ -247,7 +249,7 @@ def trend_summary_lines(report: TrendReport, metric: str = SESSION) -> list[str]
         )
         lines.append("Cost per 1% isn't compared: too few windows have a price for every model.")
     else:
-        lines.append(f"Latest {unit} included; not enough comparable figures yet.")
+        lines.append(f"{lead}: not enough comparable figures yet.")
     return lines
 
 
@@ -864,7 +866,13 @@ class UsageCostTab(QWidget):
         self.status_label.setHidden(not notes)
 
         available = last_import is not None and recognized is not False
-        windows = current_windows(provider, self._snapshot, store, now) if available else {}
+        windows = (
+            current_windows(
+                provider, self._snapshot, store, now, account_id=self._account_id
+            )
+            if available
+            else {}
+        )
         self._assign_colors(now, available)
         self._fill_cards(windows, now, available, running)
         self._refresh_models(now, windows, available)
@@ -1122,6 +1130,8 @@ class UsageCostTab(QWidget):
             metric,
             self._rates,
             [local_day_bounds(day)[0] for day in self.limit_change_dates()],
+            recent_windows=TREND_RECENT.get(metric, 1),
+            baseline_windows=TREND_BASELINE.get(metric, 8),
         )
 
     def trend_text(self) -> str:

@@ -53,6 +53,14 @@ def _save(service, index, pct, flags=(), model="claude-sonnet-5", metric="Sessio
     )
 
 
+def _baseline_then_recent(service, recent_pct, recent_model="claude-sonnet-5", start=1):
+    """Three baseline sessions at 20% ($0.50 per 1%), then five recent ones."""
+    for index in range(start, start + 3):
+        _save(service, index, 20)
+    for index in range(start + 3, start + 8):
+        _save(service, index, recent_pct, model=recent_model)
+
+
 def _tab(qtbot, service):
     tab = UsageCostTab(
         service, "claude", "Claude",
@@ -68,14 +76,13 @@ def _column(table, col):
     return [table.item(r, col).text() for r in range(table.rowCount())]
 
 
-def test_headline_answers_in_plain_words(qtbot, service):
-    for index, pct in enumerate((20, 40, 20, 10), start=1):
-        _save(service, index, pct)
+def test_headline_uses_the_last_five_sessions_in_plain_words(qtbot, service):
+    _baseline_then_recent(service, recent_pct=10)
 
     tab = _tab(qtbot, service)
 
     assert tab.trend_headline_label.text() == (
-        "Latest session: 1% of the limit covered about $1.00 of usage"
+        "Last 5 sessions: 1% of the limit covered about $1.00 of usage"
     )
     detail = tab.trend_detail_label.text()
     assert "100% more than usual (typical $0.50, from 3 earlier sessions)" in detail
@@ -83,8 +90,10 @@ def test_headline_answers_in_plain_words(qtbot, service):
     assert tab.trend_warning_label.isHidden()
 
 
-def test_about_the_same_within_ten_percent(qtbot, service):
-    for index, pct in enumerate((20, 20, 20, 19), start=1):
+def test_one_unusual_session_does_not_swing_the_answer(qtbot, service):
+    for index in range(1, 4):
+        _save(service, index, 20)
+    for index, pct in enumerate((20, 20, 20, 20, 80), start=4):
         _save(service, index, pct)
 
     tab = _tab(qtbot, service)
@@ -93,8 +102,7 @@ def test_about_the_same_within_ten_percent(qtbot, service):
 
 
 def test_compared_table_is_short_with_vs_typical(qtbot, service):
-    for index, pct in enumerate((20, 40, 20, 10), start=1):
-        _save(service, index, pct)
+    _baseline_then_recent(service, recent_pct=10)
 
     tab = _tab(qtbot, service)
 
@@ -102,7 +110,7 @@ def test_compared_table_is_short_with_vs_typical(qtbot, service):
     assert [table.horizontalHeaderItem(i).text() for i in range(5)] == [
         "Window", "Used", "Cost per 1%", "Output per 1%", "vs typical",
     ]
-    assert _column(table, 1) == ["10%", "20%", "40%", "20%"]
+    assert _column(table, 1) == ["10%"] * 5 + ["20%"] * 3
     assert _column(table, 4)[0] == "+100%"
     assert table.isColumnHidden(5)
     tab.trend_details_cb.setChecked(True)
@@ -116,7 +124,7 @@ def test_skipped_windows_fold_into_one_line(qtbot, service):
 
     tab = _tab(qtbot, service)
 
-    assert tab.trend_headline_label.text() == "Needs 3 earlier completed sessions to compare; 0 so far."
+    assert tab.trend_headline_label.text() == "Needs 8 completed sessions to compare; 1 so far."
     assert tab.trend_skipped_btn.text() == (
         "▸ 2 windows not compared (too little used 1 · limit reached 1)"
     )
@@ -142,35 +150,44 @@ def test_only_recent_windows_until_show_all(qtbot, service):
     assert tab.trend_table.rowCount() == 25
 
 
+def test_weeks_compare_the_latest_week(qtbot, service):
+    for index, pct in enumerate((20, 20, 20, 10), start=1):
+        _save(service, index, pct, metric="Weekly")
+    tab = _tab(qtbot, service)
+
+    tab.set_trend_metric("Weekly")
+
+    assert tab.trend_metric_buttons["Weekly"].isChecked()
+    assert tab.trend_headline_label.text() == (
+        "Latest week: 1% of the limit covered about $1.00 of usage"
+    )
+
+
 def test_weeks_toggle_without_windows(qtbot, service):
     _save(service, 1, 20)
     tab = _tab(qtbot, service)
 
     tab.set_trend_metric("Weekly")
 
-    assert tab.trend_metric_buttons["Weekly"].isChecked()
     assert tab.trend_headline_label.text() == "No completed weeks to compare yet."
     assert tab.trend_table.item(0, 0).text() == "No compared weeks yet."
 
 
-def test_mix_warning_when_the_latest_window_used_other_models(qtbot, service):
-    for index in range(1, 4):
-        _save(service, index, 20)
-    _save(service, 4, 20, model="claude-opus-5")
+def test_mix_warning_when_recent_windows_used_other_models(qtbot, service):
+    _baseline_then_recent(service, recent_pct=20, recent_model="claude-opus-5")
 
     tab = _tab(qtbot, service)
 
     assert not tab.trend_warning_label.isHidden()
-    assert "Mostly claude-opus-5 in the latest window" in tab.trend_warning_label.text()
+    assert "Mostly claude-opus-5 in the recent windows" in tab.trend_warning_label.text()
 
 
 def test_chart_gets_compared_windows_and_typical_line(qtbot, service):
-    for index, pct in enumerate((20, 40, 20, 10), start=1):
-        _save(service, index, pct)
+    _baseline_then_recent(service, recent_pct=10)
 
     tab = _tab(qtbot, service)
 
-    assert len(tab.trend_chart._points) == 4
+    assert len(tab.trend_chart._points) == 8
     assert tab.trend_chart._typical == pytest.approx(0.5)
     tab.trend_chart.resize(500, 170)
     assert not tab.trend_chart.grab().isNull()
@@ -192,8 +209,7 @@ def test_window_label_formats_session_and_week():
 def test_marking_a_limit_change_saves_it_and_restarts_the_baseline(qtbot, service):
     for index in range(1, 5):
         _save(service, index, 20)
-    for index in range(40, 44):
-        _save(service, index, 20)
+    _baseline_then_recent(service, recent_pct=20, start=40)
     tab = _tab(qtbot, service)
     assert not tab.limit_changes_btn.isHidden()
 

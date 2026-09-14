@@ -4,11 +4,15 @@ For each completed, comparable window:
 
     dollars per point        = window cost / percent at last reading
     output tokens per point  = window output tokens / percent at last reading
-    change vs baseline       = current / median(baseline windows) - 1
 
-The baseline is the median of at least three earlier comparable completed
-windows of the same metric. Figures across several windows divide total cost
-by total points; per-window ratios are never averaged.
+The recent figure is the median of the last few compared windows (one by
+default; the Trend view uses five sessions, because single sessions swing
+widely). It is compared with the median of the comparable windows before them:
+
+    change vs baseline       = recent / median(baseline windows) - 1
+
+A baseline needs at least three windows. Figures across several windows divide
+total cost by total points; per-window ratios are never averaged.
 
 When the user marks a date a provider changed its limits, only windows after
 the latest change are compared, and a window that spans a change is skipped.
@@ -42,6 +46,8 @@ TREND_MIN_PCT = {"Session": 10.0}
 # A window whose unpriced usage is at most this share of its tokens still gets
 # a cost per 1%, from its priced models, marked as such.
 UNPRICED_TOLERANCE = 0.10
+# A cache share this many points away from the baseline's is worth a warning.
+MIX_CACHE_POINTS = 0.15
 
 COUNTED = "counted"
 REASON_NO_READING = "no quota reading"
@@ -90,7 +96,7 @@ class Baseline:
 class TrendReport:
     metric: str
     rows: list[TrendRow]  # newest first
-    current: TrendRow | None
+    current: TrendRow | None  # the newest compared window
     dollars_baseline: Baseline
     output_baseline: Baseline
     dollars_change: float | None
@@ -99,6 +105,11 @@ class TrendReport:
     pooled_output_per_point: float | None
     limit_change: datetime | None = None  # the change the baseline restarts from
     baseline_rows: list[TrendRow] = field(default_factory=list)
+    recent_rows: list[TrendRow] = field(default_factory=list)
+    recent_dollars_per_point: float | None = None
+    recent_output_per_point: float | None = None
+    recent_windows: int = 1
+    compared_windows: int = 0
 
     @property
     def collecting(self) -> bool:
@@ -122,6 +133,11 @@ def top_model(cost: CostSummary) -> str | None:
     if priced:
         return max(priced, key=lambda r: r.cost).model
     return max(cost.rows, key=lambda r: r.tokens.output).model
+
+
+def _median(values: Iterable[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    return statistics.median(present) if present else None
 
 
 def _exclusion(summary: WindowSummary, period_id: str | None) -> str:
@@ -193,15 +209,15 @@ def _baseline(values: list[float]) -> Baseline:
     return Baseline(len(values), statistics.median(values), min(values), max(values))
 
 
-def _change(current: float | None, baseline: Baseline) -> float | None:
+def _change(recent: float | None, baseline: Baseline) -> float | None:
     if (
-        current is None
+        recent is None
         or baseline.median is None
         or baseline.median <= 0
         or baseline.windows < BASELINE_MIN_WINDOWS
     ):
         return None
-    return current / baseline.median - 1
+    return recent / baseline.median - 1
 
 
 def build_trend(
@@ -209,6 +225,8 @@ def build_trend(
     metric: str,
     rates: RateTable,
     limit_changes: Iterable[datetime] = (),
+    recent_windows: int = 1,
+    baseline_windows: int = BASELINE_MAX_WINDOWS,
 ) -> TrendReport:
     completed = sorted(
         (s for s in summaries if s.closed and s.metric == metric),
@@ -222,13 +240,16 @@ def build_trend(
     current_segment = _segment(changes, completed[0].resets_at) if completed else len(changes)
     rows = [build_row(s, rates, period_id, changes, current_segment) for s in completed]
     counted = [row for row in rows if row.counted]
-    current = counted[0] if counted else None
-    earlier = counted[1 : 1 + BASELINE_MAX_WINDOWS]
+    recent_windows = max(1, recent_windows)
+    recent = counted[:recent_windows]
+    earlier = counted[recent_windows : recent_windows + baseline_windows]
 
     output_baseline = _baseline([r.output_per_point for r in earlier if r.output_per_point is not None])
     dollars_baseline = _baseline(
         [r.dollars_per_point for r in earlier if r.dollars_counted and r.dollars_per_point is not None]
     )
+    recent_dollars = _median(r.dollars_per_point for r in recent if r.dollars_counted)
+    recent_output = _median(r.output_per_point for r in recent)
 
     priced = [r for r in counted if r.dollars_counted]
     points_priced = sum(r.pct or 0 for r in priced)
@@ -236,14 +257,11 @@ def build_trend(
     return TrendReport(
         metric=metric,
         rows=rows,
-        current=current,
+        current=counted[0] if counted else None,
         dollars_baseline=dollars_baseline,
         output_baseline=output_baseline,
-        dollars_change=_change(
-            current.dollars_per_point if current and current.dollars_counted else None,
-            dollars_baseline,
-        ),
-        output_change=_change(current.output_per_point if current else None, output_baseline),
+        dollars_change=_change(recent_dollars, dollars_baseline),
+        output_change=_change(recent_output, output_baseline),
         pooled_dollars_per_point=(
             sum(r.cost.priced_cost for r in priced) / points_priced if points_priced else None
         ),
@@ -252,37 +270,46 @@ def build_trend(
         ),
         limit_change=changes[current_segment - 1] if current_segment else None,
         baseline_rows=earlier,
+        recent_rows=recent,
+        recent_dollars_per_point=recent_dollars,
+        recent_output_per_point=recent_output,
+        recent_windows=recent_windows,
+        compared_windows=len(counted),
     )
 
 
-# A cache share this many points away from the baseline's is worth a warning.
-MIX_CACHE_POINTS = 0.15
-
-
 def mix_warnings(report: TrendReport) -> list[str]:
-    """Plain warnings when the latest window's mix differs from the baseline's.
+    """Plain warnings when the recent windows' mix differs from the baseline's.
 
     A different model or cache mix moves cost per 1% without any change to
     the allowance, so it is called out next to the verdict.
     """
-    current = report.current
+    recent = report.recent_rows
     baseline = report.baseline_rows
-    if current is None or len(baseline) < BASELINE_MIN_WINDOWS:
+    if not recent or len(baseline) < BASELINE_MIN_WINDOWS:
         return []
+
+    def most_common_model(rows: list[TrendRow]) -> str | None:
+        counts = Counter(row.top_model for row in rows if row.top_model)
+        return counts.most_common(1)[0][0] if counts else None
+
     out = []
-    tops = Counter(row.top_model for row in baseline if row.top_model)
-    usual = tops.most_common(1)[0][0] if tops else None
-    if current.top_model and usual and current.top_model != usual:
+    recent_top = most_common_model(recent)
+    usual_top = most_common_model(baseline)
+    if recent_top and usual_top and recent_top != usual_top:
         out.append(
-            f"Mostly {current.top_model} in the latest window, unlike the usual {usual}. "
+            f"Mostly {recent_top} in the recent windows, unlike the usual {usual_top}. "
             "A different model mix changes cost per 1%."
         )
-    shares = [row.cache_share for row in baseline if row.cache_share is not None]
-    if current.cache_share is not None and shares:
-        typical = statistics.median(shares)
-        if abs(current.cache_share - typical) >= MIX_CACHE_POINTS:
-            out.append(
-                f"Cache reads were {current.cache_share:.0%} of input, against a usual "
-                f"{typical:.0%}. That changes cost per 1% too."
-            )
+    recent_cache = _median(row.cache_share for row in recent)
+    usual_cache = _median(row.cache_share for row in baseline)
+    if (
+        recent_cache is not None
+        and usual_cache is not None
+        and abs(recent_cache - usual_cache) >= MIX_CACHE_POINTS
+    ):
+        out.append(
+            f"Cache reads were {recent_cache:.0%} of input in the recent windows, against a "
+            f"usual {usual_cache:.0%}. That changes cost per 1% too."
+        )
     return out

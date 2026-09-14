@@ -168,7 +168,7 @@ class RatioHistoryDialog(QDialog):
         weekly_pct_used: float | None = None,
         parent=None,
         usage_tab: QWidget | None = None,
-        open_usage_tab: bool = False,
+        open_usage_tab: bool = True,
     ):
         super().__init__(None)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
