@@ -245,7 +245,7 @@ def test_views_switch_with_their_own_controls(qtbot, service):
     assert [b.text() for b in tab.view_buttons.values()] == ["By model", "By day", "Trend"]
     tab.show_view("trend")
     assert tab.range_combo.isHidden()
-    assert not tab.trend_metric_combo.isHidden()
+    assert not tab._trend_metric_bar.isHidden()
 
 
 def test_tables_fit_their_rows_instead_of_scrolling(qtbot, service):

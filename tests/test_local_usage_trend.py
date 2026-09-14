@@ -24,6 +24,7 @@ from aigauge.local_usage.trend import (
     REASON_TIME,
     REASON_UNPRICED,
     build_trend,
+    mix_warnings,
 )
 
 UTC = timezone.utc
@@ -190,3 +191,19 @@ def test_limit_change_restarts_the_baseline_and_skips_spanning_windows(rates):
     assert reasons[windows[2].resets_at] == REASON_BEFORE_CHANGE
     assert report.limit_change == change
     assert report.collecting
+
+
+def test_mix_warning_names_a_different_top_model(rates):
+    windows = [_window(i, 20) for i in range(1, 4)] + [_window(4, 20, model="claude-opus-5")]
+
+    warnings = mix_warnings(build_trend(windows, "Session", rates))
+
+    assert len(warnings) == 1
+    assert "claude-opus-5" in warnings[0]
+    assert "claude-sonnet-5" in warnings[0]
+
+
+def test_no_mix_warning_before_a_baseline_exists(rates):
+    windows = [_window(1, 20), _window(2, 20, model="claude-opus-5")]
+
+    assert mix_warnings(build_trend(windows, "Session", rates)) == []

@@ -20,8 +20,9 @@ quota percentages, the session ratio or the MCP guard.
 from __future__ import annotations
 
 import statistics
+from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from ..ratio import MAX_COUNTABLE_PCT, MIN_COUNTABLE_PCT
@@ -97,6 +98,7 @@ class TrendReport:
     pooled_dollars_per_point: float | None
     pooled_output_per_point: float | None
     limit_change: datetime | None = None  # the change the baseline restarts from
+    baseline_rows: list[TrendRow] = field(default_factory=list)
 
     @property
     def collecting(self) -> bool:
@@ -249,4 +251,38 @@ def build_trend(
             sum(r.cost.tokens.output for r in counted) / points_all if points_all else None
         ),
         limit_change=changes[current_segment - 1] if current_segment else None,
+        baseline_rows=earlier,
     )
+
+
+# A cache share this many points away from the baseline's is worth a warning.
+MIX_CACHE_POINTS = 0.15
+
+
+def mix_warnings(report: TrendReport) -> list[str]:
+    """Plain warnings when the latest window's mix differs from the baseline's.
+
+    A different model or cache mix moves cost per 1% without any change to
+    the allowance, so it is called out next to the verdict.
+    """
+    current = report.current
+    baseline = report.baseline_rows
+    if current is None or len(baseline) < BASELINE_MIN_WINDOWS:
+        return []
+    out = []
+    tops = Counter(row.top_model for row in baseline if row.top_model)
+    usual = tops.most_common(1)[0][0] if tops else None
+    if current.top_model and usual and current.top_model != usual:
+        out.append(
+            f"Mostly {current.top_model} in the latest window, unlike the usual {usual}. "
+            "A different model mix changes cost per 1%."
+        )
+    shares = [row.cache_share for row in baseline if row.cache_share is not None]
+    if current.cache_share is not None and shares:
+        typical = statistics.median(shares)
+        if abs(current.cache_share - typical) >= MIX_CACHE_POINTS:
+            out.append(
+                f"Cache reads were {current.cache_share:.0%} of input, against a usual "
+                f"{typical:.0%}. That changes cost per 1% too."
+            )
+    return out

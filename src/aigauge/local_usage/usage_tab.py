@@ -8,11 +8,12 @@ tables grow to fit their rows instead of scrolling inside it.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 
-from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -27,10 +28,10 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -52,9 +53,18 @@ from .summaries import ORIGIN_BACKFILL, load_summaries
 from .trend import (
     BASELINE_MIN_WINDOWS,
     COUNTED,
+    REASON_BEFORE_CHANGE,
+    REASON_INCOMPLETE,
+    REASON_LIMIT,
+    REASON_LOW,
+    REASON_NO_READING,
+    REASON_PERIOD,
+    REASON_SPANS_CHANGE,
+    REASON_TIME,
     UNPRICED_TOLERANCE,
     TrendReport,
     build_trend,
+    mix_warnings,
 )
 from .windows import FABLE, SESSION, WEEKLY, WindowSpec, current_windows
 
@@ -109,9 +119,30 @@ MODEL_COLUMNS = (
     ("sidechain", "Subagent %", True),
 )
 _COLUMN_INDEX = {key: i for i, (key, _title, _details) in enumerate(MODEL_COLUMNS)}
+# The first five columns always show; the rest appear with "Details".
 TREND_COLUMNS = (
-    "Window", "Est. cost", "Quota", "Cost/1%", "Output/1%",
-    "Cache share", "Top model", "Source", "Status",
+    "Window", "Used", "Cost per 1%", "Output per 1%", "vs typical",
+    "Est. cost", "Cache share", "Top model", "Source",
+)
+TREND_BASIC_COLUMNS = 5
+TREND_RECENT_ROWS = 20
+TREND_CHART_POINTS = 60
+TREND_UNITS = {SESSION: ("session", "sessions"), WEEKLY: ("week", "weeks")}
+# About the same as usual when within this share of the typical value.
+SAME_AS_USUAL = 0.10
+SHORT_REASONS = {
+    REASON_NO_READING: "no reading",
+    REASON_LOW: "too little used",
+    REASON_LIMIT: "limit reached",
+    REASON_INCOMPLETE: "logs missing",
+    REASON_TIME: "clock change",
+    REASON_PERIOD: "different account or plan",
+    REASON_SPANS_CHANGE: "spans a limit change",
+    REASON_BEFORE_CHANGE: "before a limit change",
+}
+TREND_DEFINITION = (
+    "Cost per 1% is what a window's usage would cost at API prices, divided by how "
+    "much of the limit it used. Higher means the limit covered more."
 )
 
 _SEGMENT_STYLE = (
@@ -164,37 +195,64 @@ def _signed_percent(change: float) -> str:
     return f"{change * 100:+.0f}%"
 
 
-def trend_summary_text(report: TrendReport) -> str:
-    """The comparison line above the trend table."""
+def _verdict(change: float) -> str:
+    if abs(change) <= SAME_AS_USUAL:
+        return "About the same as usual"
+    return f"{abs(change) * 100:.0f}% {'more' if change > 0 else 'less'} than usual"
+
+
+def trend_summary_lines(report: TrendReport, metric: str = SESSION) -> list[str]:
+    """The answer at the top of the Trend view, in plain words, headline first."""
+    unit, units = TREND_UNITS.get(metric, ("window", "windows"))
+    change_day = report.limit_change.astimezone().strftime("%b %d") if report.limit_change else None
     current = report.current
-    since = (
-        f"Baseline restarted after the limit change on {report.limit_change.astimezone():%b %d}. "
-        if report.limit_change else ""
-    )
     if current is None:
-        return since + "No completed windows to compare yet."
+        if change_day:
+            return [f"No completed {units} since the limit change on {change_day} yet."]
+        return [f"No completed {units} to compare yet."]
     if report.collecting:
-        return since + (
-            f"Needs {BASELINE_MIN_WINDOWS} earlier completed windows to compare; "
+        needs = (
+            f"eeds {BASELINE_MIN_WINDOWS} earlier completed {units} to compare; "
             f"{report.output_baseline.windows} so far."
         )
-    lines = []
+        if change_day:
+            return [f"Since the limit change on {change_day}: n{needs}"]
+        return [f"N{needs}"]
+    since = f" since the limit change on {change_day}" if change_day else ""
     dollars = report.dollars_baseline
+    output = report.output_baseline
+    lines = []
     if report.dollars_change is not None and current.dollars_per_point is not None:
         lines.append(
-            f"Cost per 1%: {format_cost(current.dollars_per_point)} in the latest window, "
-            f"{_signed_percent(report.dollars_change)} vs the typical "
-            f"{format_cost(dollars.median)} ({dollars.windows} earlier windows ranged "
-            f"{format_cost(dollars.low)} to {format_cost(dollars.high)})."
+            f"Latest {unit}: 1% of the limit covered about "
+            f"{format_cost(current.dollars_per_point)} of usage"
         )
-    output = report.output_baseline
-    if report.output_change is not None and current.output_per_point is not None:
         lines.append(
-            f"Output per 1%: {format_tokens(current.output_per_point)}, "
-            f"{_signed_percent(report.output_change)} vs the typical "
-            f"{format_tokens(output.median)}."
+            f"{_verdict(report.dollars_change)} (typical {format_cost(dollars.median)}, "
+            f"from {dollars.windows} earlier {units}{since})"
         )
-    return "\n".join(lines) if lines else "Not enough priced windows to compare cost yet."
+        if report.output_change is not None and current.output_per_point is not None:
+            lines.append(
+                f"Output per 1%: {format_tokens(current.output_per_point)}, "
+                f"{_verdict(report.output_change).lower()}"
+            )
+    elif report.output_change is not None and current.output_per_point is not None:
+        lines.append(
+            f"Latest {unit}: 1% of the limit covered about "
+            f"{format_tokens(current.output_per_point)} output tokens"
+        )
+        lines.append(
+            f"{_verdict(report.output_change)} (typical {format_tokens(output.median)}, "
+            f"from {output.windows} earlier {units}{since})"
+        )
+        lines.append("Cost per 1% isn't compared: too few windows have a price for every model.")
+    else:
+        lines.append(f"Latest {unit} included; not enough comparable figures yet.")
+    return lines
+
+
+def trend_summary_text(report: TrendReport, metric: str = SESSION) -> str:
+    return "\n".join(trend_summary_lines(report, metric))
 
 
 def _label(text: str = "", color: str = TEXT, size: int = 11, bold: bool = False) -> QLabel:
@@ -237,6 +295,114 @@ class _Bar(QWidget):
                 self.label,
             )
         painter.end()
+
+
+class _TrendChart(QWidget):
+    """Cost (or output) per 1% of compared windows over time."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setFixedHeight(170)
+        self.setMouseTracking(True)
+        self._points: list[tuple[datetime, float, str]] = []
+        self._typical: float | None = None
+        self._changes: list[datetime] = []
+        self._format: Callable[[float], str] = format_cost
+        self._title = ""
+        self._screen: list[tuple[QPointF, str]] = []
+
+    def set_data(self, points, typical, changes, value_format, title) -> None:
+        self._points = list(points)
+        self._typical = typical
+        self._changes = list(changes)
+        self._format = value_format
+        self._title = title
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        font = painter.font()
+        font.setPixelSize(10)
+        painter.setFont(font)
+        left, right, top, bottom = 56.0, 16.0, 20.0, 20.0
+        plot = QRectF(
+            left, top, max(1.0, self.width() - left - right), max(1.0, self.height() - top - bottom)
+        )
+        align_left = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        align_right = int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        painter.setPen(QColor(MUTED))
+        painter.drawText(QRectF(0, 0, self.width(), top - 4), align_left, self._title)
+        self._screen = []
+        if len(self._points) < 2:
+            painter.setPen(QColor(DIM))
+            painter.drawText(plot, int(Qt.AlignmentFlag.AlignCenter),
+                             "Not enough compared windows to chart yet.")
+            painter.end()
+            return
+        values = [value for _when, value, _label in self._points]
+        high = max(values + ([self._typical] if self._typical else [])) * 1.15 or 1.0
+        start, end = self._points[0][0], self._points[-1][0]
+        span = (end - start).total_seconds() or 1.0
+
+        def x_at(when: datetime) -> float:
+            fraction = (when - start).total_seconds() / span
+            return plot.left() + plot.width() * min(1.0, max(0.0, fraction))
+
+        def y_at(value: float) -> float:
+            return plot.bottom() - plot.height() * (value / high)
+
+        painter.setPen(QPen(QColor("#374151"), 1))
+        painter.drawLine(QPointF(plot.left(), plot.bottom()), QPointF(plot.right(), plot.bottom()))
+        painter.setPen(QColor(DIM))
+        painter.drawText(QRectF(0, plot.top() - 6, left - 8, 12), align_right, self._format(high))
+        painter.drawText(QRectF(0, plot.bottom() - 6, left - 8, 12), align_right, self._format(0))
+        painter.drawText(QRectF(plot.left(), plot.bottom() + 3, 120, bottom - 3), align_left,
+                         start.astimezone().strftime("%b %d"))
+        painter.drawText(QRectF(plot.right() - 120, plot.bottom() + 3, 120, bottom - 3), align_right,
+                         end.astimezone().strftime("%b %d"))
+
+        for change in self._changes:
+            if change <= start:
+                continue
+            x = x_at(change)
+            painter.setPen(QPen(QColor(AMBER), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
+            painter.setPen(QColor(AMBER))
+            label = f"limits changed {change.astimezone():%b %d}"
+            if x > plot.right() - 150:
+                painter.drawText(QRectF(x - 154, plot.top(), 150, 12), align_right, label)
+            else:
+                painter.drawText(QRectF(x + 4, plot.top(), 150, 12), align_left, label)
+
+        if self._typical:
+            y = y_at(self._typical)
+            painter.setPen(QPen(QColor(MUTED), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
+            painter.setPen(QColor(MUTED))
+            painter.drawText(QRectF(plot.right() - 80, y - 14, 80, 12), align_right, "typical")
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        last = len(self._points) - 1
+        for index, (when, value, label) in enumerate(self._points):
+            point = QPointF(x_at(when), y_at(value))
+            painter.setBrush(QColor("#f9fafb" if index == last else "#60a5fa"))
+            radius = 4.5 if index == last else 3.0
+            painter.drawEllipse(point, radius, radius)
+            self._screen.append((point, f"{label}: {self._format(value)} per 1%"))
+        painter.end()
+
+    def mouseMoveEvent(self, event):  # noqa: N802
+        position = event.position()
+        best = None
+        for point, text in self._screen:
+            distance = (point.x() - position.x()) ** 2 + (point.y() - position.y()) ** 2
+            if distance <= 144 and (best is None or distance < best[0]):
+                best = (distance, text)
+        if best is None:
+            QToolTip.hideText()
+        else:
+            QToolTip.showText(event.globalPosition().toPoint(), best[1], self)
 
 
 class _WindowCard(QFrame):
@@ -410,6 +576,9 @@ class UsageCostTab(QWidget):
         self._daily_days: list[date] = []
         self._model_colors: dict[str, str] = {}
         self._view = VIEW_MODEL
+        self._trend_metric = SESSION
+        self._trend_show_all = False
+        self._trend_skipped_open = False
         self._connected = False
 
         root = QVBoxLayout(self)
@@ -485,12 +654,24 @@ class UsageCostTab(QWidget):
             self.range_combo.addItem(label, key)
         self.range_combo.currentIndexChanged.connect(self._on_range_changed)
         bar.addWidget(self.range_combo)
-        self.trend_metric_combo = QComboBox()
-        self.trend_metric_combo.setObjectName("usage_trend_metric")
-        self.trend_metric_combo.addItem("Session windows", SESSION)
-        self.trend_metric_combo.addItem("Weekly windows", WEEKLY)
-        self.trend_metric_combo.currentIndexChanged.connect(lambda _i: self.refresh())
-        bar.addWidget(self.trend_metric_combo)
+        self._trend_metric_bar = QWidget()
+        metric_row = QHBoxLayout(self._trend_metric_bar)
+        metric_row.setContentsMargins(0, 0, 0, 0)
+        metric_row.setSpacing(0)
+        self._trend_metric_group = QButtonGroup(self)
+        self._trend_metric_group.setExclusive(True)
+        self.trend_metric_buttons: dict[str, QPushButton] = {}
+        for metric, label in ((SESSION, "Sessions"), (WEEKLY, "Weeks")):
+            button = QPushButton(label)
+            button.setObjectName(f"usage_trend_{metric.lower()}")
+            button.setCheckable(True)
+            button.setStyleSheet(_SEGMENT_STYLE)
+            button.clicked.connect(lambda _checked=False, metric=metric: self.set_trend_metric(metric))
+            self._trend_metric_group.addButton(button)
+            self.trend_metric_buttons[metric] = button
+            metric_row.addWidget(button)
+        self.trend_metric_buttons[self._trend_metric].setChecked(True)
+        bar.addWidget(self._trend_metric_bar)
         bar.addSpacing(6)
         self.limit_changes_btn = QPushButton("Limits changed…")
         self.limit_changes_btn.setObjectName("usage_limit_changes_btn")
@@ -540,21 +721,56 @@ class UsageCostTab(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        self.trend_summary_label = _label("", TEXT, 12)
-        self.trend_summary_label.setObjectName("usage_trend_summary")
-        self.trend_summary_label.setWordWrap(True)
-        layout.addWidget(self.trend_summary_label)
+        layout.setSpacing(8)
+        layout.addWidget(_label("Is your allowance going as far as usual?", TEXT, 13, bold=True))
+
+        box = QFrame()
+        box.setObjectName("trend_answer")
+        box.setStyleSheet(
+            "QFrame#trend_answer { background:#111827; border:1px solid #374151; border-radius:6px; }"
+        )
+        box_layout = QVBoxLayout(box)
+        box_layout.setContentsMargins(12, 10, 12, 10)
+        box_layout.setSpacing(4)
+        self.trend_headline_label = _label("", TEXT, 15, bold=True)
+        self.trend_detail_label = _label("", TEXT, 12)
+        self.trend_warning_label = _label("", AMBER, 11)
+        for label in (self.trend_headline_label, self.trend_detail_label, self.trend_warning_label):
+            label.setWordWrap(True)
+            box_layout.addWidget(label)
+        layout.addWidget(box)
+        definition = _label(TREND_DEFINITION, DIM, 10)
+        definition.setWordWrap(True)
+        layout.addWidget(definition)
+
+        self.trend_chart = _TrendChart()
+        layout.addWidget(self.trend_chart)
+
         self.trend_table = _table(TREND_COLUMNS)
         self.trend_table.setObjectName("usage_trend_table")
         layout.addWidget(self.trend_table)
-        note = _label(
-            "A change in cache use or model mix moves cost per 1% even when the "
-            "allowance hasn't changed; check those columns before reading into a change.",
-            DIM, 10,
+        row = QHBoxLayout()
+        self.trend_show_all_btn = QToolButton()
+        self.trend_show_all_btn.clicked.connect(self._toggle_trend_show_all)
+        row.addWidget(self.trend_show_all_btn)
+        row.addStretch(1)
+        self.trend_details_cb = QCheckBox("Details")
+        self.trend_details_cb.setToolTip("Show cost, cache share, top model and source for each window")
+        self.trend_details_cb.toggled.connect(lambda _on: self.refresh())
+        row.addWidget(self.trend_details_cb)
+        layout.addLayout(row)
+
+        self.trend_skipped_btn = QToolButton()
+        self.trend_skipped_btn.setStyleSheet(
+            "QToolButton { background:transparent; border:none; color:#9ca3af; padding:2px 0; }"
+            "QToolButton:hover { color:#f3f4f6; }"
         )
-        note.setWordWrap(True)
-        layout.addWidget(note)
+        self.trend_skipped_btn.clicked.connect(self._toggle_trend_skipped)
+        layout.addWidget(self.trend_skipped_btn)
+        self.trend_skipped_table = _table(("Window", "Used", "Why it isn't compared"))
+        self.trend_skipped_table.setObjectName("usage_trend_skipped_table")
+        self.trend_skipped_table.setHidden(True)
+        layout.addWidget(self.trend_skipped_table)
         return page
 
     def _build_footer(self) -> QHBoxLayout:
@@ -610,7 +826,7 @@ class UsageCostTab(QWidget):
             page.setHidden(page_key != key)
         self.range_combo.setHidden(key != VIEW_MODEL)
         self.day_chip.setHidden(key != VIEW_MODEL or self._day_filter is None)
-        self.trend_metric_combo.setHidden(key != VIEW_TREND)
+        self._trend_metric_bar.setHidden(key != VIEW_TREND)
         self.limit_changes_btn.setHidden(key != VIEW_TREND)
 
     def current_view(self) -> str:
@@ -900,7 +1116,7 @@ class UsageCostTab(QWidget):
             self.set_limit_changes(dialog.dates())
 
     def trend_report(self) -> TrendReport:
-        metric = self.trend_metric_combo.currentData()
+        metric = self._trend_metric
         return build_trend(
             load_summaries(self._service.store, self._account_id, metric),
             metric,
@@ -908,46 +1124,134 @@ class UsageCostTab(QWidget):
             [local_day_bounds(day)[0] for day in self.limit_change_dates()],
         )
 
+    def trend_text(self) -> str:
+        parts = (self.trend_headline_label.text(), self.trend_detail_label.text())
+        return "\n".join(part for part in parts if part)
+
+    def set_trend_metric(self, metric: str) -> None:
+        self._trend_metric = metric
+        self._trend_show_all = False
+        for key, button in self.trend_metric_buttons.items():
+            button.setChecked(key == metric)
+        self.refresh()
+
+    def _toggle_trend_show_all(self) -> None:
+        self._trend_show_all = not self._trend_show_all
+        self.refresh()
+
+    def _toggle_trend_skipped(self) -> None:
+        self._trend_skipped_open = not self._trend_skipped_open
+        self.refresh()
+
     def _refresh_trend(self, available: bool) -> None:
+        metric = self._trend_metric
+        _unit, units = TREND_UNITS.get(metric, ("window", "windows"))
         table = self.trend_table
-        table.clearSpans()
-        table.setRowCount(0)
+        skipped_table = self.trend_skipped_table
+        for each in (table, skipped_table):
+            each.clearSpans()
+            each.setRowCount(0)
+        for column in range(TREND_BASIC_COLUMNS, len(TREND_COLUMNS)):
+            table.setColumnHidden(column, not self.trend_details_cb.isChecked())
+
         if not available:
-            self.trend_summary_label.setText("Nothing to compare yet.")
-            _placeholder(table, "No completed windows yet.")
+            self.trend_headline_label.setText("Nothing to compare yet.")
+            self.trend_detail_label.setText("")
+            self.trend_detail_label.setHidden(True)
+            self.trend_warning_label.setHidden(True)
+            self.trend_chart.set_data([], None, [], format_cost, "")
+            _placeholder(table, f"No compared {units} yet.")
             _fit(table)
+            self.trend_show_all_btn.setHidden(True)
+            self.trend_skipped_btn.setHidden(True)
+            skipped_table.setHidden(True)
             return
+
         report = self.trend_report()
-        self.trend_summary_label.setText(trend_summary_text(report))
-        if not report.rows:
-            _placeholder(table, "No completed windows yet.")
-            _fit(table)
-            return
-        table.setRowCount(len(report.rows))
-        for row_index, row in enumerate(report.rows):
-            summary = row.summary
-            status = "included" if row.counted else f"skipped: {row.reason}"
-            if row.counted and row.dollars_reason != COUNTED:
-                status = f"included; cost not compared, {row.dollars_reason}"
-            elif row.counted and row.dollars_note:
-                status = f"included; {row.dollars_note}"
-            cells = (
-                window_label(summary.window_start, summary.resets_at),
-                format_total_cost(row.cost),
-                f"{row.pct:.0f}%" if row.pct is not None else "n/a",
-                format_cost(row.dollars_per_point) if row.dollars_per_point is not None else "n/a",
-                format_tokens(row.output_per_point) if row.output_per_point is not None else "n/a",
-                f"{100 * row.cache_share:.0f}%" if row.cache_share is not None else "n/a",
-                row.top_model or "n/a",
-                "from history" if summary.origin == ORIGIN_BACKFILL else "tracked",
-                status,
-            )
-            for col, text in enumerate(cells):
-                table.setItem(
-                    row_index, col,
-                    _item(text, right=col in (1, 2, 3, 4, 5), color=None if row.counted else DIM),
+        lines = trend_summary_lines(report, metric)
+        self.trend_headline_label.setText(lines[0])
+        self.trend_detail_label.setText("\n".join(lines[1:]))
+        self.trend_detail_label.setHidden(len(lines) < 2)
+        warnings = mix_warnings(report)
+        self.trend_warning_label.setText("\n".join(f"⚠ {warning}" for warning in warnings))
+        self.trend_warning_label.setHidden(not warnings)
+
+        counted = [row for row in report.rows if row.counted]
+        changes = [local_day_bounds(day)[0] for day in self.limit_change_dates()]
+        recent = list(reversed(counted[:TREND_CHART_POINTS]))
+        if any(row.dollars_per_point is not None for row in counted):
+            points = [
+                (r.summary.resets_at, r.dollars_per_point, window_label(r.summary.window_start, r.summary.resets_at))
+                for r in recent if r.dollars_per_point is not None
+            ]
+            self.trend_chart.set_data(points, report.dollars_baseline.median, changes, format_cost, "Cost per 1%")
+        else:
+            points = [
+                (r.summary.resets_at, r.output_per_point, window_label(r.summary.window_start, r.summary.resets_at))
+                for r in recent if r.output_per_point is not None
+            ]
+            self.trend_chart.set_data(points, report.output_baseline.median, changes, format_tokens, "Output per 1%")
+
+        shown = counted if self._trend_show_all else counted[:TREND_RECENT_ROWS]
+        typical_cost = report.dollars_baseline.median
+        typical_output = report.output_baseline.median
+        if not shown:
+            _placeholder(table, f"No compared {units} yet.")
+        else:
+            table.setRowCount(len(shown))
+            for index, row in enumerate(shown):
+                summary = row.summary
+                if row.dollars_per_point is not None and typical_cost:
+                    versus = _signed_percent(row.dollars_per_point / typical_cost - 1)
+                elif row.output_per_point is not None and typical_output:
+                    versus = _signed_percent(row.output_per_point / typical_output - 1)
+                else:
+                    versus = "n/a"
+                cost_per_point = (
+                    format_cost(row.dollars_per_point) + (" *" if row.dollars_note else "")
+                    if row.dollars_per_point is not None else "n/a"
                 )
+                cells = (
+                    window_label(summary.window_start, summary.resets_at),
+                    f"{row.pct:.0f}%" if row.pct is not None else "n/a",
+                    cost_per_point,
+                    format_tokens(row.output_per_point) if row.output_per_point is not None else "n/a",
+                    versus,
+                    format_total_cost(row.cost),
+                    f"{100 * row.cache_share:.0f}%" if row.cache_share is not None else "n/a",
+                    row.top_model or "n/a",
+                    "from history" if summary.origin == ORIGIN_BACKFILL else "tracked",
+                )
+                for column, text in enumerate(cells):
+                    item = _item(text, right=column not in (0, 7, 8))
+                    if column == 2:
+                        if row.dollars_note:
+                            item.setToolTip(f"* {row.dollars_note}")
+                        elif row.dollars_reason != COUNTED:
+                            item.setToolTip(row.dollars_reason)
+                    table.setItem(index, column, item)
         _fit(table)
+        self.trend_show_all_btn.setHidden(len(counted) <= TREND_RECENT_ROWS)
+        self.trend_show_all_btn.setText(
+            f"Show recent {TREND_RECENT_ROWS}" if self._trend_show_all else f"Show all {len(counted)}"
+        )
+
+        skipped = [row for row in report.rows if not row.counted]
+        self.trend_skipped_btn.setHidden(not skipped)
+        if skipped:
+            counts = Counter(SHORT_REASONS.get(row.reason, row.reason) for row in skipped)
+            arrow = "▾" if self._trend_skipped_open else "▸"
+            noun = "window" if len(skipped) == 1 else "windows"
+            reasons = " · ".join(f"{label} {count}" for label, count in counts.most_common())
+            self.trend_skipped_btn.setText(f"{arrow} {len(skipped)} {noun} not compared ({reasons})")
+            skipped_table.setRowCount(len(skipped))
+            for index, row in enumerate(skipped):
+                summary = row.summary
+                skipped_table.setItem(index, 0, _item(window_label(summary.window_start, summary.resets_at), right=False))
+                skipped_table.setItem(index, 1, _item(f"{row.pct:.0f}%" if row.pct is not None else "n/a"))
+                skipped_table.setItem(index, 2, _item(row.reason, right=False, color=MUTED))
+            _fit(skipped_table)
+        skipped_table.setHidden(not (skipped and self._trend_skipped_open))
 
     # ---- events ----
 
