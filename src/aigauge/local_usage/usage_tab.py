@@ -442,7 +442,8 @@ class _WindowCard(QFrame):
             "QFrame#usage_card { background:#111827; border:1px solid #374151; "
             "border-radius:6px; }"
         )
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # Let the grid stretch shorter cards to the tallest card in each row.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setMinimumWidth(170)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
@@ -453,9 +454,6 @@ class _WindowCard(QFrame):
             "quota": _label("", TEXT, 12),
             "per_point": _label("", MUTED, 11),
         }
-        self.labels["per_point"].setMinimumHeight(
-            self.labels["per_point"].fontMetrics().height()
-        )
         for key, label in self.labels.items():
             label.setObjectName(f"usage_{metric.lower()}_{key}")
             layout.addWidget(label)

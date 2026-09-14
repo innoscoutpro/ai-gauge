@@ -160,9 +160,12 @@ def test_cards_reserve_height_for_an_optional_note(qtbot, service):
 
     session.set_values("This session", UNAVAILABLE, UNAVAILABLE, "")
     weekly.set_values("This week", "$12.71", "15% of allowance used", "A note")
+    tab.resize(900, 600)
+    tab.show()
+    qtbot.waitUntil(lambda: tab.card_row._columns == 2)
 
     assert not session.labels["per_point"].isHidden()
-    assert session.sizeHint().height() == weekly.sizeHint().height()
+    assert session.height() == weekly.height()
 
 
 def test_limit_reached_card_drops_cost_per_percent(qtbot, service):
