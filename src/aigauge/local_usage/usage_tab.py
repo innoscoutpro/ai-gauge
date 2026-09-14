@@ -39,6 +39,8 @@ from .rates import (
 )
 from .settings_panel import SETTINGS_DISCLOSURE, relative_time
 from .store import CLAUDE, ModelUsage, local_date, local_day_bounds
+from .summaries import ORIGIN_BACKFILL, load_summaries
+from .trend import BASELINE_MIN_WINDOWS, COUNTED, TrendReport, build_trend
 from .windows import SESSION, WEEKLY, WindowSpec, current_windows
 
 RANGE_SESSION = "session"
@@ -109,6 +111,51 @@ def share_bar(fraction: float | None, width: int = 10) -> str:
     full, part = divmod(eighths, 8)
     bar = "█" * full + ("▏▎▍▌▋▊▉"[part - 1] if part else "")
     return f"{fraction * 100:.0f}% {bar}"
+
+
+def window_label(start: datetime, end: datetime) -> str:
+    start_local, end_local = start.astimezone(), end.astimezone()
+    if (end - start) <= timedelta(hours=12):
+        return f"{start_local:%b %d %H:%M} to {end_local:%H:%M}"
+    return f"{start_local:%b %d} to {end_local:%b %d}"
+
+
+def _signed_percent(change: float) -> str:
+    return f"{change * 100:+.0f}%"
+
+
+def trend_summary_text(report: TrendReport) -> str:
+    """The baseline and change line above the trend table."""
+    current = report.current
+    if current is None:
+        return "No comparable completed windows yet."
+    if report.collecting:
+        return f"Collecting windows ({report.output_baseline.windows} of {BASELINE_MIN_WINDOWS})."
+    parts = []
+    dollars = report.dollars_baseline
+    if report.dollars_change is not None and current.dollars_per_point is not None:
+        parts.append(
+            f"$/pt {format_cost(current.dollars_per_point)} vs median "
+            f"{format_cost(dollars.median)} of {dollars.windows} earlier windows "
+            f"(range {format_cost(dollars.low)} to {format_cost(dollars.high)}): "
+            f"{_signed_percent(report.dollars_change)}"
+        )
+    output = report.output_baseline
+    if report.output_change is not None and current.output_per_point is not None:
+        parts.append(
+            f"output tok/pt {format_tokens(current.output_per_point)} vs median "
+            f"{format_tokens(output.median)} of {output.windows} earlier windows: "
+            f"{_signed_percent(report.output_change)}"
+        )
+    pooled = []
+    if report.pooled_dollars_per_point is not None:
+        pooled.append(format_cost(report.pooled_dollars_per_point) + "/pt")
+    if report.pooled_output_per_point is not None:
+        pooled.append(format_tokens(report.pooled_output_per_point) + " output tok/pt")
+    text = "Latest window: " + "; ".join(parts) if parts else "Latest window counted."
+    if pooled:
+        text += "\nAll counted windows: " + " · ".join(pooled)
+    return text
 
 
 class _StackedBar(QWidget):
@@ -249,6 +296,7 @@ class UsageCostTab(QWidget):
         self.daily_table.cellClicked.connect(self._on_day_clicked)
         self.daily_table.setMinimumHeight(160)
         self.lower_tabs.addTab(self.daily_table, "Daily")
+        self.lower_tabs.addTab(self._build_trend_page(), "Allowance trend")
         layout.addWidget(self.lower_tabs, 1)
 
         footer = QHBoxLayout()
@@ -297,6 +345,44 @@ class UsageCostTab(QWidget):
                 self._window_cells[(metric, key)] = cell
         grid.setColumnStretch(3, 1)
         return grid
+
+    def _build_trend_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 6, 4, 4)
+        layout.setSpacing(6)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Windows:"))
+        self.trend_metric_combo = QComboBox()
+        self.trend_metric_combo.setObjectName("usage_trend_metric")
+        self.trend_metric_combo.addItem(SESSION, SESSION)
+        self.trend_metric_combo.addItem(WEEKLY, WEEKLY)
+        self.trend_metric_combo.currentIndexChanged.connect(lambda _i: self.refresh())
+        row.addWidget(self.trend_metric_combo)
+        row.addStretch(1)
+        layout.addLayout(row)
+        self.trend_summary_label = QLabel("")
+        self.trend_summary_label.setObjectName("usage_trend_summary")
+        self.trend_summary_label.setWordWrap(True)
+        self.trend_summary_label.setStyleSheet("color:#e5e7eb; font-size:11px;")
+        layout.addWidget(self.trend_summary_label)
+        self.trend_table = _table(
+            ["Window", "Est. cost", "Quota", "$/pt", "Output tok/pt",
+             "Cache share", "Top model", "Origin", "Status"]
+        )
+        self.trend_table.setObjectName("usage_trend_table")
+        self.trend_table.setMinimumHeight(160)
+        layout.addWidget(self.trend_table, 1)
+        note = QLabel(
+            "Compares this computer's recorded activity with the account's usage "
+            "percentage. A different cache or model mix moves $/pt without any change "
+            "to the allowance, so check cache share and top model before reading "
+            "anything into a change."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color:#6b7280; font-size:10px;")
+        layout.addWidget(note)
+        return page
 
     def _connect(self) -> None:
         self._service.import_finished.connect(self._on_import_finished)
@@ -352,6 +438,7 @@ class UsageCostTab(QWidget):
             self._fill_window(metric, windows.get(metric), now, available, running)
         self._refresh_models(now, windows, available)
         self._refresh_daily(now, available)
+        self._refresh_trend(available)
 
     def _fill_window(
         self, metric: str, spec: WindowSpec | None, now: datetime, available: bool, partial: bool
@@ -544,6 +631,45 @@ class UsageCostTab(QWidget):
                 "\n".join(f"{r.model}: {format_cost(r.cost)}" for r in summary.rows)
             )
             table.setCellWidget(row, 3, bar)
+
+    def trend_report(self) -> TrendReport:
+        metric = self.trend_metric_combo.currentData()
+        return build_trend(load_summaries(self._service.store, self._account_id, metric), metric, self._rates)
+
+    def _refresh_trend(self, available: bool) -> None:
+        table = self.trend_table
+        table.setRowCount(0)
+        if not available:
+            self.trend_summary_label.setText("Allowance trend unavailable.")
+            return
+        report = self.trend_report()
+        self.trend_summary_label.setText(trend_summary_text(report))
+        if not report.rows:
+            table.setRowCount(1)
+            table.setItem(0, 0, _item("No completed windows yet.", align_right=False, muted=True))
+            return
+        table.setRowCount(len(report.rows))
+        for row_index, row in enumerate(report.rows):
+            summary = row.summary
+            status = "counted" if row.counted else row.reason
+            if row.counted and row.dollars_reason != COUNTED:
+                status = f"counted ($/pt left out: {row.dollars_reason})"
+            cells = (
+                window_label(summary.window_start, summary.resets_at),
+                format_total_cost(row.cost),
+                f"{row.pct:.0f}%" if row.pct is not None else UNAVAILABLE,
+                format_cost(row.dollars_per_point) if row.dollars_per_point is not None else "n/a",
+                format_tokens(row.output_per_point) if row.output_per_point is not None else "n/a",
+                f"{100 * row.cache_share:.0f}%" if row.cache_share is not None else "n/a",
+                row.top_model or "n/a",
+                "backfill" if summary.origin == ORIGIN_BACKFILL else "live",
+                status,
+            )
+            for col, text in enumerate(cells):
+                table.setItem(
+                    row_index, col,
+                    _item(text, align_right=col in (1, 2, 3, 4, 5), muted=not row.counted),
+                )
 
     # ---- events ----
 

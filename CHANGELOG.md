@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Optional local usage tracking reads Claude Code and Codex logs on this computer to show API-equivalent cost next to the quota percentages. It is off by default and turned on in the new **Local usage** Settings tab. Design: [docs/local-usage-cost-plan.md](docs/local-usage-cost-plan.md).
+- Turning it on offers to import the history the logs still hold. The import runs in the background, can be cancelled, and resumes where it stopped.
+- The usage details dialog gains a **Usage and cost** tab: cost, quota used and dollars per point for the current session and week, plus a per-model table for a range of days and a daily view.
+- An **Allowance trend** view compares completed windows against a baseline, listing each window it left out and why (for example, a limit reached where extra usage may be billed).
+- A **Usage details** menu entry opens the dialog before the session ratio has calibrated.
+
 ## 0.7.8 - 2026-09-12
 
 ### Fixed
