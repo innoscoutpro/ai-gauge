@@ -11,12 +11,21 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from ..config import Config, LocalUsageProviderConfig, app_data_dir, browser_account
+from ..config import Config, app_data_dir
+from ..history import PeriodRecord
+from . import summaries
+from .assignment import (
+    assigned_account,
+    comparison_period_id,
+    provider_config,
+    provider_for_account,
+)
 from .importer import ImportSource, LogImporter, ProviderImportResult, provider_roots
 from .store import CLAUDE, CODEX, DB_FILENAME, PROVIDERS, UsageStore, from_db_time
 
@@ -27,39 +36,6 @@ BACKFILL = "backfill"
 # The details dialog triggers an import when it opens, at most this often.
 DIALOG_IMPORT_MIN_INTERVAL_S = 60.0
 _PROGRESS_EMIT_INTERVAL_S = 0.1
-
-
-def provider_config(config: Config, provider: str) -> LocalUsageProviderConfig:
-    return getattr(config.local_usage, provider)
-
-
-def assigned_account(config: Config, provider: str) -> str | None:
-    """The account a provider's local usage counts against, if tracking is active."""
-    if not config.local_usage.enabled:
-        return None
-    settings = provider_config(config, provider)
-    if not settings.enabled or not settings.account_id:
-        return None
-    account = browser_account(config, settings.account_id)
-    if account is None or account.kind != provider:
-        return None  # removed or changed account: tracking pauses
-    return account.id
-
-
-def provider_for_account(config: Config, account_id: str) -> str | None:
-    for provider in PROVIDERS:
-        if assigned_account(config, provider) == account_id:
-            return provider
-    return None
-
-
-def comparison_period_id(config: Config, provider: str) -> str:
-    """Windows are only compared with windows from the same period.
-
-    Changing the assigned account or the log folder starts a new one.
-    """
-    settings = provider_config(config, provider)
-    return f"{provider}|{settings.account_id or ''}|{settings.log_root or ''}"
 
 
 def database_path(base_dir: Path | None = None) -> Path:
@@ -85,8 +61,14 @@ class LocalUsageService(QObject):
         self._last_progress_emit = 0.0
         self._last_import_started: float | None = None
         self._last_results: list[ProviderImportResult] = []
+        # Claude periods from AI Gauge's own readings, copied from the UI
+        # thread and consumed by the worker when it updates window summaries.
+        self._claude_current: dict[str, list[PeriodRecord]] = {}
+        self._claude_closed: list[PeriodRecord] = []
+        # Returns closed periods from history.jsonl, for Claude backfill.
+        self.history_records: Callable[[], list[PeriodRecord]] | None = None
         # Called in the worker after each import, before import_finished.
-        self.after_import: list[Callable[[UsageStore], None]] = []
+        self.after_import: list[Callable[[UsageStore], None]] = [self._update_summaries]
 
     # ---- state ----
 
@@ -137,6 +119,17 @@ class LocalUsageService(QObject):
                 )
             )
         return out
+
+    def note_claude_periods(
+        self,
+        account_id: str,
+        current: list[PeriodRecord],
+        closed: list[PeriodRecord],
+    ) -> None:
+        """Record the latest Claude readings for the next summary update."""
+        with self._lock:
+            self._claude_current[account_id] = [replace(r) for r in current]
+            self._claude_closed.extend(replace(r) for r in closed)
 
     # ---- requests ----
 
@@ -238,6 +231,26 @@ class LocalUsageService(QObject):
             else:
                 self._running_kind = None
 
+    def _update_summaries(self, store: UsageStore) -> None:
+        account = assigned_account(self._config, CLAUDE)
+        with self._lock:
+            current = list(self._claude_current.get(account, [])) if account else []
+            closed = [r for r in self._claude_closed if r.provider == account]
+            self._claude_closed = []
+        history = []
+        if account is not None and self.history_records is not None:
+            try:
+                history = self.history_records()
+            except Exception:  # noqa: BLE001
+                log.exception("could not read usage history for backfill")
+        summaries.update_all(
+            store,
+            self._config,
+            claude_current=current,
+            claude_closed=closed,
+            history=history,
+        )
+
     def _on_progress(self, done: int, total: int) -> None:
         self._progress = (done, total)
         now = time.monotonic()
@@ -251,12 +264,13 @@ class LocalUsageService(QObject):
         try:
             importer = LogImporter(store, cancel=self._cancel, progress=self._on_progress)
             results = importer.run(self.sources())
-            store.prune()
             for hook in list(self.after_import):
                 try:
                     hook(store)
                 except Exception:  # noqa: BLE001
                     log.exception("local usage after-import hook failed")
+            # Summaries first: they copy the usage of windows about to be pruned.
+            store.prune()
         except Exception:  # noqa: BLE001
             log.exception("local usage %s import failed", kind)
         finally:

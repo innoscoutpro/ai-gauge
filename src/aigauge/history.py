@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
@@ -137,6 +137,10 @@ class HistoryStore:
 
         self._save_current()
         return closed
+
+    def current_records(self) -> list[PeriodRecord]:
+        """Copies of the in-flight periods, safe to hand to another thread."""
+        return [replace(record) for record in self._state.values()]
 
     def iter_history(self) -> Iterable[PeriodRecord]:
         if not self._history_path.exists():

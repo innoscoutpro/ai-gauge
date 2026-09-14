@@ -1089,6 +1089,7 @@ class App(QObject):
             except Exception:  # noqa: BLE001
                 log.exception("local usage tracking could not start")
                 return
+            self._local_usage.history_records = lambda: list(self._history.iter_history())
         if old_local_usage is None or old_local_usage == self._config.local_usage:
             return
         before = self._config.model_copy(update={"local_usage": old_local_usage})
@@ -1129,8 +1130,16 @@ class App(QObject):
         service = self._local_usage
         if service is None or snapshot.status != SnapshotStatus.OK:
             return
-        if service.provider_for_account(snapshot.provider) is None:
+        provider = service.provider_for_account(snapshot.provider)
+        if provider is None:
             return
+        if provider == "claude":
+            service.note_claude_periods(
+                snapshot.provider,
+                [r for r in self._history.current_records() if r.provider == snapshot.provider],
+                [r for r in closed_periods if r.provider == snapshot.provider],
+            )
+        # The import runs in the background; window summaries update when it ends.
         service.request_import()
 
     def _shutdown_local_usage(self) -> None:
