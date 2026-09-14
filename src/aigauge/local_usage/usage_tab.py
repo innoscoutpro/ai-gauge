@@ -434,11 +434,17 @@ class UsageCostTab(QWidget):
         layout.addWidget(self.card_row)
 
         layout.addLayout(self._build_view_bar())
-        self.views = QStackedWidget()
-        self.views.addWidget(self._build_model_page())
-        self.views.addWidget(self._build_day_page())
-        self.views.addWidget(self._build_trend_page())
-        layout.addWidget(self.views)
+        # Pages sit in the layout and only the current one is shown: a hidden
+        # widget takes no space, whereas a stacked widget is as tall as its
+        # tallest page and pads short views with empty space.
+        self.pages = {
+            VIEW_MODEL: self._build_model_page(),
+            VIEW_DAY: self._build_day_page(),
+            VIEW_TREND: self._build_trend_page(),
+        }
+        for page in self.pages.values():
+            page.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            layout.addWidget(page)
         layout.addStretch(1)
 
         root.addLayout(self._build_footer())
@@ -520,6 +526,7 @@ class UsageCostTab(QWidget):
         self.day_legend = _label("", MUTED, 11)
         self.day_legend.setTextFormat(Qt.TextFormat.RichText)
         self.day_legend.setWordWrap(True)
+        self.day_legend.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         layout.addWidget(self.day_legend)
         self.daily_table = _table(["Day", "Est. cost", "Msgs", "Cost by model"])
         self.daily_table.setObjectName("usage_daily_table")
@@ -597,22 +604,17 @@ class UsageCostTab(QWidget):
     # ---- views ----
 
     def show_view(self, key: str) -> None:
-        keys = [k for k, _label_text in VIEWS]
-        index = keys.index(key)
         self._view = key
         self.view_buttons[key].setChecked(True)
-        self.views.setCurrentIndex(index)
-        # A stacked widget sizes to its tallest page; ignore hidden pages so
-        # a short table doesn't leave an empty gap.
-        for i in range(self.views.count()):
-            page = self.views.widget(i)
-            policy = QSizePolicy.Policy.Preferred if i == index else QSizePolicy.Policy.Ignored
-            page.setSizePolicy(policy, policy)
-        self.views.adjustSize()
+        for page_key, page in self.pages.items():
+            page.setHidden(page_key != key)
         self.range_combo.setHidden(key != VIEW_MODEL)
         self.day_chip.setHidden(key != VIEW_MODEL or self._day_filter is None)
         self.trend_metric_combo.setHidden(key != VIEW_TREND)
         self.limit_changes_btn.setHidden(key != VIEW_TREND)
+
+    def current_view(self) -> str:
+        return self._view
 
     def card_text(self, metric: str, key: str) -> str:
         return self.cards[metric].labels[key].text()

@@ -231,7 +231,7 @@ def test_clicking_a_day_shows_its_models_with_a_removable_chip(qtbot, service):
 
     tab._on_day_clicked(0, 0)
 
-    assert tab.views.currentIndex() == 0
+    assert tab.current_view() == "model"
     assert not tab.day_chip.isHidden()
     assert _model_rows(tab)[0][0] == "● claude-opus-5"
     tab.day_chip.click()
@@ -338,3 +338,20 @@ def test_details_menu_opens_the_usage_tab(qtbot):
 
     assert [a.text() for a in actions] == ["Claude", "Codex"]
     assert opened == [("claude", {"show_usage": True})]
+
+
+def test_short_views_start_at_the_top_after_a_tall_one(qtbot, service):
+    service.run_sync()
+    tab = _tab(qtbot, service, snapshot=_claude_snapshot())
+    tab.resize(700, 600)
+    tab.show()
+    tab.show_view("trend")
+    qtbot.wait(10)
+
+    tab.show_view("day")
+    qtbot.wait(10)
+
+    day_page = tab.pages["day"]
+    assert tab.pages["trend"].isHidden()
+    assert tab.daily_table.y() < 80
+    assert day_page.height() < tab.daily_table.height() + 120
