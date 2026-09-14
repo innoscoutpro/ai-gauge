@@ -1,4 +1,10 @@
-"""The "Usage and cost" tab of the details dialog."""
+"""The "Usage and cost" tab of the details dialog.
+
+Top to bottom: a card for each current window (session, week, and a
+model-specific limit such as Fable), one view at a time (by model, by day or
+trend), and a footer that stays in view. The tab scrolls as a single area;
+tables grow to fit their rows instead of scrolling inside it.
+"""
 
 from __future__ import annotations
 
@@ -9,8 +15,10 @@ from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -19,9 +27,9 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -41,51 +49,76 @@ from .settings_panel import SETTINGS_DISCLOSURE, relative_time
 from .store import CLAUDE, ModelUsage, local_date, local_day_bounds
 from .summaries import ORIGIN_BACKFILL, load_summaries
 from .trend import BASELINE_MIN_WINDOWS, COUNTED, TrendReport, build_trend
-from .windows import SESSION, WEEKLY, WindowSpec, current_windows
+from .windows import FABLE, SESSION, WEEKLY, WindowSpec, current_windows
 
-RANGE_SESSION = "session"
 RANGE_WEEK = "week"
+RANGE_SESSION = "session"
 RANGE_TODAY = "today"
 RANGE_7D = "7d"
 RANGE_30D = "30d"
-RANGE_DAY = "day"
+# "This week" first, so the table matches the week card by default.
 RANGES = (
-    (RANGE_SESSION, "Current session"),
-    (RANGE_WEEK, "Current week"),
+    (RANGE_WEEK, "This week"),
+    (RANGE_SESSION, "This session"),
     (RANGE_TODAY, "Today"),
     (RANGE_7D, "Last 7 days"),
     (RANGE_30D, "Last 30 days"),
 )
+VIEW_MODEL = "model"
+VIEW_DAY = "day"
+VIEW_TREND = "trend"
+VIEWS = ((VIEW_MODEL, "By model"), (VIEW_DAY, "By day"), (VIEW_TREND, "Trend"))
 DAILY_DAYS = 30
-UNAVAILABLE = "unavailable"
+UNAVAILABLE = "Not available yet"
 FOOTER_TEXT = "This computer's logs only · API-equivalent estimate"
-_WINDOW_ROW_TIPS = {
-    "cost": "What this window's usage so far would cost at API prices.",
-    "quota": "The allowance used, from the latest reading.",
-    "per_point": "Estimated cost for each 1% of the allowance used.",
-    "output_per_point": "Output tokens for each 1% of the allowance used.",
-}
+CARD_TITLES = {SESSION: "This session", WEEKLY: "This week", FABLE: "Fable this week"}
+LIMIT_TIP = (
+    "Usage past the limit may be billed as extra usage, so cost per 1% isn't "
+    "meaningful for this window."
+)
 
+TEXT = "#e5e7eb"
+MUTED = "#9ca3af"
+DIM = "#6b7280"
+AMBER = "#fbbf24"
+RED = "#f87171"
 MODEL_COLORS = (
-    "#60a5fa", "#f59e0b", "#34d399", "#f472b6",
+    "#60a5fa", "#34d399", "#f472b6", "#f59e0b",
     "#a78bfa", "#f87171", "#22d3ee", "#a3e635",
 )
 
+# key, header, shown only with "Token details"
 MODEL_COLUMNS = (
     ("model", "Model", False),
-    ("messages", "Msgs", False),
-    ("input", "Input", False),
+    ("cost", "Est. cost", False),
+    ("share", "Share of cost", False),
     ("output", "Output", False),
-    ("cache_read", "Cache rd", False),
-    ("cache_write", "Cache wr", False),
-    ("cache_write_5m", "Cache 5m", True),
-    ("cache_write_1h", "Cache 1h", True),
+    ("messages", "Msgs", False),
+    ("input", "Input", True),
+    ("cache_read", "Cache read", True),
+    ("cache_write", "Cache write", True),
     ("reasoning", "Reasoning", True),
     ("sidechain", "Subagent %", True),
-    ("cost", "Est. cost", False),
-    ("share", "Share", False),
 )
-_COLUMN_INDEX = {key: i for i, (key, _title, _extra) in enumerate(MODEL_COLUMNS)}
+_COLUMN_INDEX = {key: i for i, (key, _title, _details) in enumerate(MODEL_COLUMNS)}
+TREND_COLUMNS = (
+    "Window", "Est. cost", "Quota", "Cost/1%", "Output/1%",
+    "Cache share", "Top model", "Source", "Status",
+)
+
+_SEGMENT_STYLE = (
+    "QPushButton { background:#111827; color:#9ca3af; border:1px solid #374151; "
+    "border-radius:0; padding:4px 14px; min-height:20px; }"
+    "QPushButton:checked { background:#374151; color:#f9fafb; }"
+    "QPushButton:hover { color:#f3f4f6; }"
+)
+_CHIP_STYLE = (
+    "QPushButton { background:#1e3a8a; color:#dbeafe; border:1px solid #1d4ed8; "
+    "border-radius:10px; padding:2px 10px; min-height:18px; }"
+)
+
+
+# ---- formatting ----
 
 
 def format_tokens(value: float | None) -> str:
@@ -97,7 +130,9 @@ def format_tokens(value: float | None) -> str:
         return f"{value / 1000:.1f}K"
     if value < 1_000_000:
         return f"{value / 1000:.0f}K"
-    return f"{value / 1_000_000:.1f}M"
+    if value < 1_000_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    return f"{value / 1_000_000_000:.1f}B"
 
 
 def format_time_left(resets_at: datetime, now: datetime) -> str:
@@ -105,18 +140,9 @@ def format_time_left(resets_at: datetime, now: datetime) -> str:
     if seconds <= 0:
         return "resetting"
     if seconds >= 86400:
-        return f"{seconds // 86400}d left"
+        return f"{seconds // 86400}d {(seconds % 86400) // 3600}h left"
     hours, rem = divmod(seconds, 3600)
     return f"{hours}h {rem // 60}m left" if hours else f"{rem // 60}m left"
-
-
-def share_bar(fraction: float | None, width: int = 10) -> str:
-    if fraction is None:
-        return "n/a"
-    eighths = round(max(0.0, min(1.0, fraction)) * width * 8)
-    full, part = divmod(eighths, 8)
-    bar = "█" * full + ("▏▎▍▌▋▊▉"[part - 1] if part else "")
-    return f"{fraction * 100:.0f}% {bar}"
 
 
 def window_label(start: datetime, end: datetime) -> str:
@@ -159,48 +185,194 @@ def trend_summary_text(report: TrendReport) -> str:
     return "\n".join(lines) if lines else "Not enough priced windows to compare cost yet."
 
 
-class _StackedBar(QWidget):
-    def __init__(self, segments: list[tuple[float, str]], parent: QWidget | None = None):
+def _label(text: str = "", color: str = TEXT, size: int = 11, bold: bool = False) -> QLabel:
+    label = QLabel(text)
+    weight = "font-weight:700;" if bold else ""
+    label.setStyleSheet(f"color:{color}; font-size:{size}px; {weight}")
+    return label
+
+
+# ---- widgets ----
+
+
+class _Bar(QWidget):
+    """Coloured bar segments with an optional label on the right."""
+
+    def __init__(self, segments: list[tuple[float, str]], label: str = "", parent=None):
         super().__init__(parent)
-        self._segments = segments
-        self.setMinimumWidth(80)
-        self.setFixedHeight(14)
+        self.segments = segments
+        self.label = label
+        self.setMinimumHeight(20)
 
     def paintEvent(self, event):  # noqa: N802
         painter = QPainter(self)
-        rect = QRectF(self.rect()).adjusted(2, 3, -2, -3)
+        rect = QRectF(self.rect()).adjusted(6, 0, -6, 0)
+        text_width = 40.0 if self.label else 0.0
+        bar_width = max(0.0, rect.width() - text_width)
+        top = rect.center().y() - 5
         x = rect.left()
-        for fraction, color in self._segments:
-            width = rect.width() * max(0.0, fraction)
+        for fraction, color in self.segments:
+            width = bar_width * max(0.0, min(1.0, fraction))
             if width <= 0:
                 continue
-            painter.fillRect(QRectF(x, rect.top(), width, rect.height()), QColor(color))
+            painter.fillRect(QRectF(x, top, width, 10), QColor(color))
             x += width
+        if self.label:
+            painter.setPen(QColor(TEXT))
+            painter.drawText(
+                QRectF(rect.right() - text_width, rect.top(), text_width, rect.height()),
+                int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                self.label,
+            )
         painter.end()
 
 
-def _item(text: str, align_right: bool = True, muted: bool = False) -> QTableWidgetItem:
+class _WindowCard(QFrame):
+    def __init__(self, metric: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.metric = metric
+        self.setObjectName("usage_card")
+        self.setStyleSheet(
+            "QFrame#usage_card { background:#111827; border:1px solid #374151; "
+            "border-radius:6px; }"
+        )
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(170)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(3)
+        self.labels = {
+            "title": _label(CARD_TITLES[metric], MUTED, 11),
+            "cost": _label("", TEXT, 22, bold=True),
+            "quota": _label("", TEXT, 12),
+            "per_point": _label("", MUTED, 11),
+        }
+        for key, label in self.labels.items():
+            label.setObjectName(f"usage_{metric.lower()}_{key}")
+            layout.addWidget(label)
+
+    def set_values(
+        self, title: str, cost: str, quota: str, per_point: str, *, limit: bool = False
+    ) -> None:
+        self.labels["title"].setText(title)
+        self.labels["cost"].setText(cost)
+        self.labels["quota"].setText(quota)
+        self.labels["quota"].setStyleSheet(
+            f"color:{RED if limit else TEXT}; font-size:12px; {'font-weight:700;' if limit else ''}"
+        )
+        self.labels["quota"].setToolTip(LIMIT_TIP if limit else "")
+        self.labels["per_point"].setText(per_point)
+        self.labels["per_point"].setToolTip(LIMIT_TIP if limit else "")
+        self.labels["per_point"].setHidden(not per_point)
+
+
+class _CardRow(QWidget):
+    """Cards side by side, wrapping to more rows when the tab is narrow."""
+
+    _MIN_CARD = 200
+
+    def __init__(self, cards: list[_WindowCard], parent: QWidget | None = None):
+        super().__init__(parent)
+        self._all = cards
+        self._visible = list(cards)
+        self._columns = 0
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(10)
+        self._relayout(force=True)
+
+    def set_visible_cards(self, cards: list[_WindowCard]) -> None:
+        if cards == self._visible:
+            return
+        self._visible = cards
+        self._relayout(force=True)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._relayout()
+
+    def _relayout(self, force: bool = False) -> None:
+        count = max(1, len(self._visible))
+        width = self.width()
+        columns = count if width <= 0 else max(1, min(count, width // self._MIN_CARD))
+        if columns == self._columns and not force:
+            return
+        self._columns = columns
+        for card in self._all:
+            self._grid.removeWidget(card)
+            card.setHidden(card not in self._visible)
+        for index, card in enumerate(self._visible):
+            self._grid.addWidget(card, index // columns, index % columns)
+        for column in range(len(self._all)):
+            self._grid.setColumnStretch(column, 1 if column < columns else 0)
+
+
+def _table(columns: list[str] | tuple[str, ...]) -> QTableWidget:
+    table = QTableWidget(0, len(columns))
+    table.setHorizontalHeaderLabels(list(columns))
+    table.verticalHeader().setVisible(False)
+    table.verticalHeader().setDefaultSectionSize(28)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+    table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    table.setShowGrid(False)
+    table.setWordWrap(False)
+    table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    header.setStretchLastSection(True)
+    header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    return table
+
+
+def _fit(table: QTableWidget, fixed: dict[int, int] | None = None) -> None:
+    """Size a table to its rows, so only the tab itself scrolls."""
+    header = table.horizontalHeader()
+    fixed = fixed or {}
+    for column, width in fixed.items():
+        header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(column, width)
+    frame = 2 * table.frameWidth()
+    width = frame
+    for column in range(table.columnCount()):
+        if table.isColumnHidden(column):
+            continue
+        width += fixed.get(
+            column, max(table.sizeHintForColumn(column), header.sectionSizeHint(column))
+        )
+    height = frame + header.sizeHint().height()
+    height += sum(table.rowHeight(row) for row in range(table.rowCount()))
+    table.setMinimumWidth(width)
+    table.setFixedHeight(height)
+
+
+def _item(text: str, *, right: bool = True, color: str | None = None, bold: bool = False) -> QTableWidgetItem:
     item = QTableWidgetItem(text)
-    item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-    if align_right:
-        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-    if muted:
-        item.setForeground(QColor("#6b7280"))
+    item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+    item.setTextAlignment(
+        (Qt.AlignmentFlag.AlignRight if right else Qt.AlignmentFlag.AlignLeft)
+        | Qt.AlignmentFlag.AlignVCenter
+    )
+    if color:
+        item.setForeground(QColor(color))
+    if bold:
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
     return item
 
 
-def _table(columns: list[str]) -> QTableWidget:
-    table = QTableWidget(0, len(columns))
-    table.setHorizontalHeaderLabels(columns)
-    table.verticalHeader().setVisible(False)
-    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-    table.setAlternatingRowColors(False)
-    table.setShowGrid(False)
-    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-    table.horizontalHeader().setStretchLastSection(True)
-    table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-    return table
+def _placeholder(table: QTableWidget, text: str) -> None:
+    table.clearSpans()
+    table.setRowCount(1)
+    table.setItem(0, 0, _item(text, right=False, color=DIM))
+    if table.columnCount() > 1:
+        table.setSpan(0, 0, 1, table.columnCount())
+
+
+# ---- the tab ----
 
 
 class UsageCostTab(QWidget):
@@ -217,172 +389,169 @@ class UsageCostTab(QWidget):
         super().__init__(parent)
         self._service = service
         self._account_id = account_id
+        self._display_name = display_name
         self._provider = service.provider_for_account(account_id) or CLAUDE
         self._snapshot = snapshot
         self._rates = rate_table or load_rate_table()
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._day_filter: date | None = None
+        self._daily_days: list[date] = []
         self._model_colors: dict[str, str] = {}
+        self._view = VIEW_MODEL
         self._connected = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(6)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        root.addWidget(scroll)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        root.addWidget(scroll, 1)
         body = QWidget()
         scroll.setWidget(body)
         layout = QVBoxLayout(body)
-        layout.setContentsMargins(4, 8, 4, 4)
-        layout.setSpacing(8)
+        layout.setContentsMargins(4, 10, 4, 4)
+        layout.setSpacing(12)
 
-        title_row = QHBoxLayout()
-        title = QLabel("<b>Usage and cost</b>")
-        title.setTextFormat(Qt.TextFormat.RichText)
-        title_row.addWidget(title)
-        title_row.addStretch(1)
-        self.updated_label = QLabel("")
-        self.updated_label.setStyleSheet("color:#9ca3af; font-size:11px;")
-        title_row.addWidget(self.updated_label)
-        layout.addLayout(title_row)
-
-        subtitle_row = QHBoxLayout()
-        subtitle = QLabel(f"This computer · {display_name}")
-        subtitle.setStyleSheet("color:#9ca3af; font-size:11px;")
-        subtitle_row.addWidget(subtitle)
-        subtitle_row.addStretch(1)
-        self.importing_label = QLabel("")
-        self.importing_label.setStyleSheet("color:#fbbf24; font-size:11px;")
-        subtitle_row.addWidget(self.importing_label)
-        self.cancel_btn = QToolButton()
-        self.cancel_btn.setText("✕")
-        self.cancel_btn.setToolTip("Cancel import")
-        self.cancel_btn.clicked.connect(self._service.cancel)
-        subtitle_row.addWidget(self.cancel_btn)
-        layout.addLayout(subtitle_row)
-
-        self.status_label = QLabel("")
+        self.status_label = _label("", AMBER, 11)
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("color:#fbbf24; font-size:11px;")
         layout.addWidget(self.status_label)
 
-        layout.addLayout(self._build_window_grid())
+        self.cards = {metric: _WindowCard(metric) for metric in (SESSION, WEEKLY, FABLE)}
+        self.card_row = _CardRow(list(self.cards.values()))
+        layout.addWidget(self.card_row)
 
-        models_row = QHBoxLayout()
-        models_title = QLabel("<b>Models</b>")
-        models_title.setTextFormat(Qt.TextFormat.RichText)
-        models_row.addWidget(models_title)
+        layout.addLayout(self._build_view_bar())
+        self.views = QStackedWidget()
+        self.views.addWidget(self._build_model_page())
+        self.views.addWidget(self._build_day_page())
+        self.views.addWidget(self._build_trend_page())
+        layout.addWidget(self.views)
+        layout.addStretch(1)
+
+        root.addLayout(self._build_footer())
+
+        self._connect()
+        self.show_view(VIEW_MODEL)
+        self.refresh()
+
+    # ---- building ----
+
+    def _build_view_bar(self) -> QHBoxLayout:
+        bar = QHBoxLayout()
+        bar.setSpacing(0)
+        self._view_group = QButtonGroup(self)
+        self._view_group.setExclusive(True)
+        self.view_buttons: dict[str, QPushButton] = {}
+        for key, label in VIEWS:
+            button = QPushButton(label)
+            button.setObjectName(f"usage_view_{key}")
+            button.setCheckable(True)
+            button.setStyleSheet(_SEGMENT_STYLE)
+            button.clicked.connect(lambda _checked=False, key=key: self.show_view(key))
+            self._view_group.addButton(button)
+            self.view_buttons[key] = button
+            bar.addWidget(button)
+        bar.addSpacing(12)
+        self.day_chip = QPushButton("")
+        self.day_chip.setObjectName("usage_day_chip")
+        self.day_chip.setStyleSheet(_CHIP_STYLE)
+        self.day_chip.setToolTip("Show the whole range again")
+        self.day_chip.clicked.connect(self._clear_day_filter)
+        self.day_chip.setHidden(True)
+        bar.addWidget(self.day_chip)
+        bar.addStretch(1)
         self.range_combo = QComboBox()
         self.range_combo.setObjectName("usage_range_combo")
         for key, label in RANGES:
             self.range_combo.addItem(label, key)
         self.range_combo.currentIndexChanged.connect(self._on_range_changed)
-        models_row.addWidget(self.range_combo)
-        models_row.addStretch(1)
-        self.more_columns_cb = QCheckBox("More columns")
-        self.more_columns_cb.toggled.connect(self._sync_columns)
-        models_row.addWidget(self.more_columns_cb)
-        layout.addLayout(models_row)
+        bar.addWidget(self.range_combo)
+        self.trend_metric_combo = QComboBox()
+        self.trend_metric_combo.setObjectName("usage_trend_metric")
+        self.trend_metric_combo.addItem("Session windows", SESSION)
+        self.trend_metric_combo.addItem("Weekly windows", WEEKLY)
+        self.trend_metric_combo.currentIndexChanged.connect(lambda _i: self.refresh())
+        bar.addWidget(self.trend_metric_combo)
+        return bar
 
-        self.model_table = _table([title for _key, title, _extra in MODEL_COLUMNS])
+    def _build_model_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.model_table = _table([title for _key, title, _details in MODEL_COLUMNS])
         self.model_table.setObjectName("usage_model_table")
-        self.model_table.setMinimumHeight(140)
-        layout.addWidget(self.model_table, 1)
-        self._sync_columns()
+        layout.addWidget(self.model_table)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.token_details_cb = QCheckBox("Token details")
+        self.token_details_cb.setToolTip("Show input, cache, reasoning and subagent columns")
+        self.token_details_cb.toggled.connect(self._on_token_details)
+        row.addWidget(self.token_details_cb)
+        layout.addLayout(row)
+        return page
 
-        self.lower_tabs = QTabWidget()
-        self.daily_table = _table(["Day", "Est. cost", "Msgs", "By model"])
+    def _build_day_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.day_legend = _label("", MUTED, 11)
+        self.day_legend.setTextFormat(Qt.TextFormat.RichText)
+        self.day_legend.setWordWrap(True)
+        layout.addWidget(self.day_legend)
+        self.daily_table = _table(["Day", "Est. cost", "Msgs", "Cost by model"])
         self.daily_table.setObjectName("usage_daily_table")
         self.daily_table.cellClicked.connect(self._on_day_clicked)
-        self.daily_table.setMinimumHeight(160)
-        self.lower_tabs.addTab(self.daily_table, "Daily")
-        self.lower_tabs.addTab(self._build_trend_page(), "Allowance trend")
-        layout.addWidget(self.lower_tabs, 1)
+        self.daily_table.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(self.daily_table)
+        layout.addWidget(_label("Click a day to see its models.", DIM, 10))
+        return page
 
+    def _build_trend_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.trend_summary_label = _label("", TEXT, 12)
+        self.trend_summary_label.setObjectName("usage_trend_summary")
+        self.trend_summary_label.setWordWrap(True)
+        layout.addWidget(self.trend_summary_label)
+        self.trend_table = _table(TREND_COLUMNS)
+        self.trend_table.setObjectName("usage_trend_table")
+        layout.addWidget(self.trend_table)
+        note = _label(
+            "A change in cache use or model mix moves cost per 1% even when the "
+            "allowance hasn't changed; check those columns before reading into a change.",
+            DIM, 10,
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        return page
+
+    def _build_footer(self) -> QHBoxLayout:
         footer = QHBoxLayout()
-        footer_label = QLabel(FOOTER_TEXT)
-        footer_label.setStyleSheet("color:#6b7280; font-size:10px;")
-        footer.addWidget(footer_label)
+        footer.setContentsMargins(4, 0, 4, 0)
+        footer.setSpacing(6)
+        self.updated_label = _label("", DIM, 10)
+        footer.addWidget(self.updated_label)
+        footer.addWidget(_label("·", DIM, 10))
+        footer.addWidget(_label(FOOTER_TEXT, DIM, 10))
         info = QToolButton()
         info.setText("i")
         info.setToolTip("About these numbers")
         info.clicked.connect(self._show_disclosure)
         footer.addWidget(info)
         footer.addStretch(1)
-        layout.addLayout(footer)
-
-        self._connect()
-        self.refresh()
-
-    # ---- building ----
-
-    def _build_window_grid(self) -> QGridLayout:
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(18)
-        grid.setVerticalSpacing(3)
-        self._window_headers: dict[str, QLabel] = {}
-        self._window_cells: dict[tuple[str, str], QLabel] = {}
-        rows = (
-            ("cost", "Est. API cost"),
-            ("quota", "Quota used"),
-            ("per_point", "Cost per 1%"),
-            ("output_per_point", "Output per 1%"),
-        )
-        for col, metric in enumerate((SESSION, WEEKLY), start=1):
-            header = QLabel(metric)
-            header.setStyleSheet("color:#9ca3af; font-size:11px; font-weight:700;")
-            grid.addWidget(header, 0, col)
-            self._window_headers[metric] = header
-        for row, (key, label) in enumerate(rows, start=1):
-            name = QLabel(label)
-            name.setToolTip(_WINDOW_ROW_TIPS.get(key, ""))
-            name.setStyleSheet("color:#9ca3af; font-size:11px;")
-            grid.addWidget(name, row, 0)
-            for col, metric in enumerate((SESSION, WEEKLY), start=1):
-                cell = QLabel(UNAVAILABLE)
-                cell.setObjectName(f"usage_{metric.lower()}_{key}")
-                cell.setStyleSheet("color:#e5e7eb; font-size:12px; font-weight:600;")
-                grid.addWidget(cell, row, col)
-                self._window_cells[(metric, key)] = cell
-        grid.setColumnStretch(3, 1)
-        return grid
-
-    def _build_trend_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(4, 6, 4, 4)
-        layout.setSpacing(6)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Windows:"))
-        self.trend_metric_combo = QComboBox()
-        self.trend_metric_combo.setObjectName("usage_trend_metric")
-        self.trend_metric_combo.addItem(SESSION, SESSION)
-        self.trend_metric_combo.addItem(WEEKLY, WEEKLY)
-        self.trend_metric_combo.currentIndexChanged.connect(lambda _i: self.refresh())
-        row.addWidget(self.trend_metric_combo)
-        row.addStretch(1)
-        layout.addLayout(row)
-        self.trend_summary_label = QLabel("")
-        self.trend_summary_label.setObjectName("usage_trend_summary")
-        self.trend_summary_label.setWordWrap(True)
-        self.trend_summary_label.setStyleSheet("color:#e5e7eb; font-size:11px;")
-        layout.addWidget(self.trend_summary_label)
-        self.trend_table = _table(
-            ["Window", "Est. cost", "Quota", "Cost/1%", "Output/1%",
-             "Cache share", "Top model", "Source", "Status"]
-        )
-        self.trend_table.setObjectName("usage_trend_table")
-        self.trend_table.setMinimumHeight(160)
-        layout.addWidget(self.trend_table, 1)
-        note = QLabel(
-            "A change in cache use or model mix moves cost per 1% even when the "
-            "allowance hasn't changed; check those columns before reading into a change."
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet("color:#6b7280; font-size:10px;")
-        layout.addWidget(note)
-        return page
+        self.importing_label = _label("", AMBER, 10)
+        footer.addWidget(self.importing_label)
+        self.cancel_btn = QToolButton()
+        self.cancel_btn.setText("Cancel")
+        self.cancel_btn.setToolTip("Stop the import. It picks up where it left off next time.")
+        self.cancel_btn.clicked.connect(self._service.cancel)
+        footer.addWidget(self.cancel_btn)
+        return footer
 
     def _connect(self) -> None:
         self._service.import_finished.connect(self._on_import_finished)
@@ -405,10 +574,29 @@ class UsageCostTab(QWidget):
                 pass
         self._connected = False
 
-    # ---- data ----
+    # ---- views ----
 
-    def window_cell_text(self, metric: str, key: str) -> str:
-        return self._window_cells[(metric, key)].text()
+    def show_view(self, key: str) -> None:
+        keys = [k for k, _label_text in VIEWS]
+        index = keys.index(key)
+        self._view = key
+        self.view_buttons[key].setChecked(True)
+        self.views.setCurrentIndex(index)
+        # A stacked widget sizes to its tallest page; ignore hidden pages so
+        # a short table doesn't leave an empty gap.
+        for i in range(self.views.count()):
+            page = self.views.widget(i)
+            policy = QSizePolicy.Policy.Preferred if i == index else QSizePolicy.Policy.Ignored
+            page.setSizePolicy(policy, policy)
+        self.views.adjustSize()
+        self.range_combo.setHidden(key != VIEW_MODEL)
+        self.day_chip.setHidden(key != VIEW_MODEL or self._day_filter is None)
+        self.trend_metric_combo.setHidden(key != VIEW_TREND)
+
+    def card_text(self, metric: str, key: str) -> str:
+        return self.cards[metric].labels[key].text()
+
+    # ---- data ----
 
     def refresh(self) -> None:
         store = self._service.store
@@ -417,7 +605,8 @@ class UsageCostTab(QWidget):
         last_import = store.last_import(provider)
         running = self._service.is_running()
         self.updated_label.setText(
-            "Not imported yet" if last_import is None else f"Updated {relative_time(last_import, now)}"
+            "Not imported yet" if last_import is None
+            else f"Updated {relative_time(last_import, now)}"
         )
         self._sync_import_status(running)
 
@@ -431,230 +620,251 @@ class UsageCostTab(QWidget):
         if running:
             notes.append("Import in progress; numbers are partial until it finishes.")
         if self._rates.errors:
-            notes.append("Some prices failed to load; those models show \"no price\".")
+            notes.append('Some prices failed to load; those models show "no price".')
         self.status_label.setText(" ".join(notes))
-        self.status_label.setVisible(bool(notes))
+        self.status_label.setHidden(not notes)
 
         available = last_import is not None and recognized is not False
         windows = current_windows(provider, self._snapshot, store, now) if available else {}
-        for metric in (SESSION, WEEKLY):
-            self._fill_window(metric, windows.get(metric), now, available, running)
+        self._assign_colors(now, available)
+        self._fill_cards(windows, now, available, running)
         self._refresh_models(now, windows, available)
         self._refresh_daily(now, available)
         self._refresh_trend(available)
+        self.show_view(self._view)
 
-    def _fill_window(
-        self, metric: str, spec: WindowSpec | None, now: datetime, available: bool, partial: bool
+    def _window_usage(self, spec: WindowSpec, start: datetime, end: datetime) -> list[ModelUsage]:
+        rows = self._service.store.usage_by_model(self._provider, start, end)
+        if spec.model_filter:
+            rows = [row for row in rows if spec.model_filter in row.model.lower()]
+        return rows
+
+    def _fill_cards(
+        self, windows: dict[str, WindowSpec], now: datetime, available: bool, partial: bool
     ) -> None:
-        header = self._window_headers[metric]
-        cells = {key: self._window_cells[(metric, key)] for key in
-                 ("cost", "quota", "per_point", "output_per_point")}
-        if spec is None or not available:
-            header.setText(metric)
-            for cell in cells.values():
-                cell.setText(UNAVAILABLE)
-            return
-        header.setText(f"{metric} ({format_time_left(spec.resets_at, now)})")
-        store = self._service.store
-        summary = summarize_costs(store.usage_by_model(self._provider, spec.start, now), self._rates)
-        suffix = " (partial)" if partial else ""
-        cells["cost"].setText(format_total_cost(summary) + suffix)
-        pct = spec.pct
-        cells["quota"].setToolTip("")
-        if pct is None:
-            cells["quota"].setText(UNAVAILABLE)
-        elif pct >= 100:
-            cells["quota"].setText(f"{pct:.0f}% (limit reached)")
-            cells["quota"].setToolTip(
-                "Usage past the limit may be billed as extra usage, so cost per 1% "
-                "isn't meaningful for this window."
-            )
-        else:
-            cells["quota"].setText(f"{pct:.0f}%")
-        if pct is None or pct < MIN_COUNTABLE_PCT or spec.last_reading_at is None:
-            cells["per_point"].setText("n/a")
-            cells["output_per_point"].setText("n/a")
-            return
+        visible = []
+        for metric, card in self.cards.items():
+            spec = windows.get(metric)
+            if metric == FABLE and spec is None:
+                continue  # only shown for accounts with a Fable limit
+            visible.append(card)
+            if spec is None or not available:
+                card.set_values(CARD_TITLES[metric], UNAVAILABLE, UNAVAILABLE, "")
+                continue
+            title = f"{CARD_TITLES[metric]} · {format_time_left(spec.resets_at, now)}"
+            summary = summarize_costs(self._window_usage(spec, spec.start, now), self._rates)
+            cost = format_total_cost(summary) + (" (partial)" if partial else "")
+            pct = spec.pct
+            limit = pct is not None and pct >= 100
+            allowance = "Fable allowance" if metric == FABLE else "allowance"
+            if pct is None:
+                quota = "No reading yet"
+            elif limit:
+                quota = f"{pct:.0f}% · limit reached"
+            else:
+                quota = f"{pct:.0f}% of {allowance} used"
+            card.set_values(title, cost, quota, self._per_point_text(spec, pct, limit), limit=limit)
+        self.card_row.set_visible_cards(visible)
+
+    def _per_point_text(self, spec: WindowSpec, pct: float | None, limit: bool) -> str:
+        if pct is None or spec.last_reading_at is None:
+            return ""
+        if limit:
+            return "No cost per 1% at the limit"
+        if pct < MIN_COUNTABLE_PCT:
+            return "Too early for cost per 1%"
         at_reading = summarize_costs(
-            store.usage_by_model(self._provider, spec.start, spec.last_reading_at), self._rates
+            self._window_usage(spec, spec.start, spec.last_reading_at), self._rates
         )
-        cells["per_point"].setText(
-            "no price" if at_reading.has_unpriced
-            else format_cost(at_reading.priced_cost / pct)
+        if at_reading.has_unpriced:
+            return "Some models have no price"
+        return f"≈ {format_cost(at_reading.priced_cost / pct)} per 1%"
+
+    def _assign_colors(self, now: datetime, available: bool) -> None:
+        """Colour models by 30-day cost, so a model keeps its colour across views."""
+        if not available:
+            return
+        today = local_date(now)
+        daily = self._service.store.daily_totals(
+            self._provider, today - timedelta(days=DAILY_DAYS - 1), today
         )
-        cells["output_per_point"].setText(format_tokens(at_reading.tokens.output / pct))
+        rows = [row for day_rows in daily.values() for row in day_rows]
+        for model_row in summarize_costs(rows, self._rates).rows:
+            if model_row.model not in self._model_colors:
+                self._model_colors[model_row.model] = MODEL_COLORS[
+                    len(self._model_colors) % len(MODEL_COLORS)
+                ]
+
+    def _color(self, model: str) -> str:
+        if model not in self._model_colors:
+            self._model_colors[model] = MODEL_COLORS[len(self._model_colors) % len(MODEL_COLORS)]
+        return self._model_colors[model]
 
     def _range_bounds(
         self, key: str, now: datetime, windows: dict[str, WindowSpec]
     ) -> tuple[datetime, datetime] | None:
-        today = local_date(now)
-        if key == RANGE_DAY and self._day_filter is not None:
+        if self._day_filter is not None:
             return local_day_bounds(self._day_filter)
-        if key == RANGE_SESSION:
-            spec = windows.get(SESSION)
-            return (spec.start, now) if spec else None
-        if key == RANGE_WEEK:
-            spec = windows.get(WEEKLY)
+        if key in (RANGE_SESSION, RANGE_WEEK):
+            spec = windows.get(SESSION if key == RANGE_SESSION else WEEKLY)
             return (spec.start, now) if spec else None
         days = {RANGE_TODAY: 1, RANGE_7D: 7, RANGE_30D: 30}.get(key)
         if days is None:
             return None
-        start, _ = local_day_bounds(today - timedelta(days=days - 1))
+        start, _ = local_day_bounds(local_date(now) - timedelta(days=days - 1))
         return start, now
 
     def _range_usage(
         self, key: str, now: datetime, windows: dict[str, WindowSpec]
     ) -> list[ModelUsage] | None:
         store = self._service.store
-        if key in (RANGE_SESSION, RANGE_WEEK):
+        if self._day_filter is None and key in (RANGE_SESSION, RANGE_WEEK):
             bounds = self._range_bounds(key, now, windows)
             return None if bounds is None else store.usage_by_model(self._provider, *bounds)
-        today = local_date(now)
-        if key == RANGE_DAY and self._day_filter is not None:
+        if self._day_filter is not None:
             first = last = self._day_filter
         else:
             days = {RANGE_TODAY: 1, RANGE_7D: 7, RANGE_30D: 30}.get(key, 1)
-            first, last = today - timedelta(days=days - 1), today
+            last = local_date(now)
+            first = last - timedelta(days=days - 1)
         # Daily totals outlive raw rows, so longer ranges keep working.
         daily = store.daily_totals(self._provider, first, last)
         return [row for rows in daily.values() for row in rows]
 
-    def _refresh_models(self, now: datetime, windows: dict[str, WindowSpec], available: bool) -> None:
+    def _refresh_models(
+        self, now: datetime, windows: dict[str, WindowSpec], available: bool
+    ) -> None:
         table = self.model_table
+        table.clearSpans()
         table.setRowCount(0)
         key = self.range_combo.currentData()
         usage = self._range_usage(key, now, windows) if available else None
+        share_column = _COLUMN_INDEX["share"]
         if usage is None:
-            table.setRowCount(1)
-            table.setItem(0, 0, _item("Nothing to show for this range yet.", align_right=False, muted=True))
+            _placeholder(table, "Nothing to show for this range yet.")
+            _fit(table, {share_column: 170})
             return
         summary = summarize_costs(usage, self._rates)
-        self._assign_colors(summary)
-        sidechain = {}
+        if not summary.rows:
+            _placeholder(table, "No usage in this range.")
+            _fit(table, {share_column: 170})
+            return
+        sidechain: dict[str, int] = {}
         if self._provider == CLAUDE:
             bounds = self._range_bounds(key, now, windows)
             if bounds is not None:
                 sidechain = self._service.store.sidechain_output(*bounds)
-        if not summary.rows:
-            table.setRowCount(1)
-            table.setItem(0, 0, _item("No usage recorded in this range.", align_right=False, muted=True))
-            return
         table.setRowCount(len(summary.rows) + 1)
         for row, model_row in enumerate(summary.rows):
             tokens = model_row.tokens
+            color = self._color(model_row.model)
             side = sidechain.get(model_row.model)
+            cost_text = (
+                format_cost(model_row.cost) + (" + unpriced" if model_row.has_unpriced else "")
+                if model_row.cost is not None else "no price"
+            )
             values = {
-                "model": model_row.model,
-                "messages": f"{model_row.messages:,}",
-                "input": format_tokens(tokens.input),
-                "output": format_tokens(tokens.output),
-                "cache_read": format_tokens(tokens.cache_read),
-                "cache_write": format_tokens(tokens.cache_write_5m + tokens.cache_write_1h),
-                "cache_write_5m": format_tokens(tokens.cache_write_5m),
-                "cache_write_1h": format_tokens(tokens.cache_write_1h),
-                "reasoning": format_tokens(tokens.reasoning),
+                "model": (f"● {model_row.model}", False, color),
+                "cost": (cost_text, True, TEXT if model_row.cost is not None else DIM),
+                "output": (format_tokens(tokens.output), True, None),
+                "messages": (f"{model_row.messages:,}", True, None),
+                "input": (format_tokens(tokens.input), True, None),
+                "cache_read": (format_tokens(tokens.cache_read), True, None),
+                "cache_write": (format_tokens(tokens.cache_write_5m + tokens.cache_write_1h), True, None),
+                "reasoning": (format_tokens(tokens.reasoning), True, None),
                 "sidechain": (
-                    f"{100 * side / tokens.output:.0f}%" if side is not None and tokens.output
-                    else "n/a"
+                    f"{100 * side / tokens.output:.0f}%" if side is not None and tokens.output else "n/a",
+                    True, None,
                 ),
-                "cost": (
-                    format_cost(model_row.cost) + (" + unpriced" if model_row.has_unpriced else "")
-                    if model_row.cost is not None else "no price"
-                ),
-                "share": share_bar(summary.share(model_row)),
             }
-            for col_key, text in values.items():
-                item = _item(text, align_right=col_key not in ("model", "share"),
-                             muted=model_row.cost is None)
-                if col_key == "model":
-                    item.setForeground(QColor(self._model_colors.get(model_row.model, "#e5e7eb")))
-                table.setItem(row, _COLUMN_INDEX[col_key], item)
-        self._fill_total_row(len(summary.rows), summary)
-
-    def _fill_total_row(self, row: int, summary: CostSummary) -> None:
+            for col_key, (text, right, text_color) in values.items():
+                table.setItem(row, _COLUMN_INDEX[col_key], _item(text, right=right, color=text_color))
+            share = summary.share(model_row)
+            if share is None:
+                table.setItem(row, share_column, _item("n/a", right=False, color=DIM))
+            else:
+                table.setCellWidget(row, share_column, _Bar([(share, color)], f"{share * 100:.0f}%"))
+        total = len(summary.rows)
         tokens = summary.tokens
-        values = {
-            "model": "Total",
-            "messages": f"{summary.messages:,}",
-            "input": format_tokens(tokens.input),
-            "output": format_tokens(tokens.output),
-            "cache_read": format_tokens(tokens.cache_read),
-            "cache_write": format_tokens(tokens.cache_write_5m + tokens.cache_write_1h),
-            "cache_write_5m": format_tokens(tokens.cache_write_5m),
-            "cache_write_1h": format_tokens(tokens.cache_write_1h),
-            "reasoning": format_tokens(tokens.reasoning),
-            "sidechain": "",
-            "cost": format_total_cost(summary),
-            "share": "",
+        totals = {
+            "model": ("Total", False),
+            "cost": (format_total_cost(summary), True),
+            "output": (format_tokens(tokens.output), True),
+            "messages": (f"{summary.messages:,}", True),
+            "input": (format_tokens(tokens.input), True),
+            "cache_read": (format_tokens(tokens.cache_read), True),
+            "cache_write": (format_tokens(tokens.cache_write_5m + tokens.cache_write_1h), True),
+            "reasoning": (format_tokens(tokens.reasoning), True),
         }
-        for col_key, text in values.items():
-            item = _item(text, align_right=col_key != "model")
-            font = item.font()
-            font.setBold(True)
-            item.setFont(font)
-            self.model_table.setItem(row, _COLUMN_INDEX[col_key], item)
-
-    def _assign_colors(self, summary: CostSummary) -> None:
-        for model_row in summary.rows:
-            if model_row.model not in self._model_colors:
-                self._model_colors[model_row.model] = MODEL_COLORS[
-                    len(self._model_colors) % len(MODEL_COLORS)
-                ]
+        for col_key, (text, right) in totals.items():
+            table.setItem(total, _COLUMN_INDEX[col_key], _item(text, right=right, bold=True))
+        self._on_token_details(self.token_details_cb.isChecked(), refit=False)
+        _fit(table, {share_column: 170})
 
     def _refresh_daily(self, now: datetime, available: bool) -> None:
         table = self.daily_table
+        table.clearSpans()
         table.setRowCount(0)
-        self._daily_days: list[date] = []
+        self._daily_days = []
+        self.day_legend.setText("")
         if not available:
-            table.setRowCount(1)
-            table.setItem(0, 0, _item("Usage unavailable.", align_right=False, muted=True))
+            _placeholder(table, "Nothing to show yet.")
+            _fit(table, {3: 300})
             return
         today = local_date(now)
         daily = self._service.store.daily_totals(
             self._provider, today - timedelta(days=DAILY_DAYS - 1), today
         )
         if not daily:
-            table.setRowCount(1)
-            table.setItem(0, 0, _item("No daily usage recorded yet.", align_right=False, muted=True))
+            _placeholder(table, "No daily usage yet.")
+            _fit(table, {3: 300})
             return
         summaries = {day: summarize_costs(rows, self._rates) for day, rows in daily.items()}
-        for summary in summaries.values():
-            self._assign_colors(summary)
+        models = sorted(
+            {r.model for s in summaries.values() for r in s.rows},
+            key=lambda m: list(self._model_colors).index(m) if m in self._model_colors else 99,
+        )
+        self.day_legend.setText(
+            "&nbsp;&nbsp;&nbsp;".join(
+                f'<span style="color:{self._color(m)}">●</span> {m}' for m in models
+            )
+        )
         peak = max((s.priced_cost for s in summaries.values()), default=0.0) or 1.0
         days = sorted(summaries, reverse=True)
         table.setRowCount(len(days))
         for row, day in enumerate(days):
             summary = summaries[day]
             self._daily_days.append(day)
-            table.setItem(row, 0, _item(day.strftime("%a %b %d"), align_right=False))
+            table.setItem(row, 0, _item(day.strftime("%a %b %d"), right=False))
             table.setItem(row, 1, _item(format_total_cost(summary)))
             table.setItem(row, 2, _item(f"{summary.messages:,}"))
-            segments = [
-                ((r.cost or 0.0) / peak, self._model_colors.get(r.model, "#9ca3af"))
-                for r in summary.rows
-                if r.cost
-            ]
-            bar = _StackedBar(segments)
-            bar.setToolTip(
-                "\n".join(f"{r.model}: {format_cost(r.cost)}" for r in summary.rows)
+            bar = _Bar(
+                [((r.cost or 0.0) / peak, self._color(r.model)) for r in summary.rows if r.cost]
             )
+            bar.setToolTip("\n".join(f"{r.model}: {format_cost(r.cost)}" for r in summary.rows))
             table.setCellWidget(row, 3, bar)
+        _fit(table, {3: 300})
 
     def trend_report(self) -> TrendReport:
         metric = self.trend_metric_combo.currentData()
-        return build_trend(load_summaries(self._service.store, self._account_id, metric), metric, self._rates)
+        return build_trend(
+            load_summaries(self._service.store, self._account_id, metric), metric, self._rates
+        )
 
     def _refresh_trend(self, available: bool) -> None:
         table = self.trend_table
+        table.clearSpans()
         table.setRowCount(0)
         if not available:
-            self.trend_summary_label.setText("Allowance trend unavailable.")
+            self.trend_summary_label.setText("Nothing to compare yet.")
+            _placeholder(table, "No completed windows yet.")
+            _fit(table)
             return
         report = self.trend_report()
         self.trend_summary_label.setText(trend_summary_text(report))
         if not report.rows:
-            table.setRowCount(1)
-            table.setItem(0, 0, _item("No completed windows yet.", align_right=False, muted=True))
+            _placeholder(table, "No completed windows yet.")
+            _fit(table)
             return
         table.setRowCount(len(report.rows))
         for row_index, row in enumerate(report.rows):
@@ -665,7 +875,7 @@ class UsageCostTab(QWidget):
             cells = (
                 window_label(summary.window_start, summary.resets_at),
                 format_total_cost(row.cost),
-                f"{row.pct:.0f}%" if row.pct is not None else UNAVAILABLE,
+                f"{row.pct:.0f}%" if row.pct is not None else "n/a",
                 format_cost(row.dollars_per_point) if row.dollars_per_point is not None else "n/a",
                 format_tokens(row.output_per_point) if row.output_per_point is not None else "n/a",
                 f"{100 * row.cache_share:.0f}%" if row.cache_share is not None else "n/a",
@@ -676,45 +886,36 @@ class UsageCostTab(QWidget):
             for col, text in enumerate(cells):
                 table.setItem(
                     row_index, col,
-                    _item(text, align_right=col in (1, 2, 3, 4, 5), muted=not row.counted),
+                    _item(text, right=col in (1, 2, 3, 4, 5), color=None if row.counted else DIM),
                 )
+        _fit(table)
 
     # ---- events ----
 
-    def _sync_columns(self) -> None:
-        show_extra = self.more_columns_cb.isChecked()
-        for index, (_key, _title, extra) in enumerate(MODEL_COLUMNS):
-            self.model_table.setColumnHidden(index, extra and not show_extra)
+    def _on_token_details(self, show: bool, refit: bool = True) -> None:
+        for index, (_key, _title, details) in enumerate(MODEL_COLUMNS):
+            self.model_table.setColumnHidden(index, details and not show)
+        if refit:
+            _fit(self.model_table, {_COLUMN_INDEX["share"]: 170})
 
     def _on_range_changed(self, _index: int) -> None:
-        if self.range_combo.currentData() != RANGE_DAY:
-            day_index = self.range_combo.findData(RANGE_DAY)
-            if day_index >= 0:
-                self.range_combo.blockSignals(True)
-                self.range_combo.removeItem(day_index)
-                self.range_combo.blockSignals(False)
-            self._day_filter = None
+        self._day_filter = None
         self.refresh()
 
     def _on_day_clicked(self, row: int, _column: int) -> None:
-        days = getattr(self, "_daily_days", [])
-        if row >= len(days):
+        if row >= len(self._daily_days):
             return
-        self._day_filter = days[row]
-        label = f"Day: {self._day_filter:%b %d}"
-        index = self.range_combo.findData(RANGE_DAY)
-        self.range_combo.blockSignals(True)
-        if index < 0:
-            self.range_combo.addItem(label, RANGE_DAY)
-            index = self.range_combo.count() - 1
-        else:
-            self.range_combo.setItemText(index, label)
-        self.range_combo.setCurrentIndex(index)
-        self.range_combo.blockSignals(False)
+        self._day_filter = self._daily_days[row]
+        self.day_chip.setText(f"{self._day_filter:%b %d}  ✕")
+        self._view = VIEW_MODEL
+        self.refresh()
+
+    def _clear_day_filter(self) -> None:
+        self._day_filter = None
         self.refresh()
 
     def _sync_import_status(self, running: bool) -> None:
-        self.cancel_btn.setVisible(running)
+        self.cancel_btn.setHidden(not running)
         if not running:
             self.importing_label.setText("")
             return

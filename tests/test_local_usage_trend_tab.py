@@ -73,7 +73,8 @@ def test_trend_page_shows_change_against_baseline(qtbot, service):
 
     tab = _tab(qtbot, service)
 
-    assert tab.lower_tabs.tabText(1) == "Allowance trend"
+    tab.show_view("trend")
+    assert tab.view_buttons["trend"].text() == "Trend"
     text = tab.trend_summary_label.text()
     assert "Cost per 1%: $2.00 in the latest window, +100% vs the typical $1.00" in text
     assert "3 earlier windows ranged $0.50 to $1.00" in text

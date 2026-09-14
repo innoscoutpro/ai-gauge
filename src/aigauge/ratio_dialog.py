@@ -168,6 +168,7 @@ class RatioHistoryDialog(QDialog):
         weekly_pct_used: float | None = None,
         parent=None,
         usage_tab: QWidget | None = None,
+        open_usage_tab: bool = False,
     ):
         super().__init__(None)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
@@ -216,6 +217,7 @@ class RatioHistoryDialog(QDialog):
             self.tabs = QTabWidget()
             self.tabs.addTab(ratio_page, "Session vs weekly")
             self.tabs.addTab(usage_tab, "Usage and cost")
+            self.tabs.setCurrentIndex(1 if open_usage_tab else 0)
             outer.addWidget(self.tabs, 1)
 
         close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)

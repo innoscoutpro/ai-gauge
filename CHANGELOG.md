@@ -6,7 +6,7 @@
 
 - Optional local usage tracking reads Claude Code and Codex logs on this computer to show API-equivalent cost next to the quota percentages. It is off by default and turned on in the new **Local usage** Settings tab. Design: [docs/local-usage-cost-plan.md](docs/local-usage-cost-plan.md).
 - **Import history** in that tab brings in the usage the logs still hold, without closing Settings. The import runs in the background, can be cancelled, and resumes where it stopped.
-- The usage details dialog gains a **Usage and cost** tab: cost, quota used and cost per 1% of the allowance for the current session and week, plus a per-model table for a range of days and a daily view.
+- The usage details dialog gains a **Usage and cost** tab with cards for the current session, week and Fable limit (cost, allowance used, cost per 1%), and views by model, by day and over time.
 - An **Allowance trend** view compares completed windows against a baseline, listing each window it left out and why (for example, a limit reached where extra usage may be billed).
 - A **Usage details** menu entry opens the dialog before the session ratio has calibrated.
 

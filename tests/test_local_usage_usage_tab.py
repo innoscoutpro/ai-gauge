@@ -8,15 +8,17 @@ from PyQt6.QtWidgets import QMenu
 
 from aigauge import app as app_module
 from aigauge.config import Config
+from aigauge.local_usage.claude_logs import ClaudeMessage
 from aigauge.local_usage.codex_logs import CodexQuotaReading
 from aigauge.local_usage.rates import load_rate_table
 from aigauge.local_usage.service import LocalUsageService
+from aigauge.local_usage.tokens import TokenCounts
 from aigauge.local_usage.usage_tab import (
     RANGES,
     UNAVAILABLE,
     UsageCostTab,
+    _Bar,
     format_tokens,
-    share_bar,
 )
 from aigauge.local_usage.windows import (
     claude_windows_from_snapshot,
@@ -26,30 +28,37 @@ from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
 from aigauge.ratio_dialog import RatioHistoryDialog
 
 FIXTURES = Path(__file__).parent / "fixtures" / "local_usage"
-NOW = datetime(2026, 9, 10, 18, 0, tzinfo=timezone.utc)
+UTC = timezone.utc
+NOW = datetime(2026, 9, 10, 18, 0, tzinfo=UTC)
 
 
 def _local_naive(dt: datetime) -> datetime:
     return dt.astimezone().replace(tzinfo=None)
 
 
-def _claude_snapshot(session_pct=20.0, weekly_pct=10.0) -> UsageSnapshot:
+def _claude_snapshot(session_pct=20.0, weekly_pct=10.0, fable_pct=None) -> UsageSnapshot:
+    metrics = [
+        UsageMetric(
+            "Session", session_pct,
+            resets_at=_local_naive(datetime(2026, 9, 10, 16, 0, tzinfo=UTC)),
+            window=timedelta(hours=5),
+        ),
+        UsageMetric(
+            "Weekly", weekly_pct,
+            resets_at=_local_naive(datetime(2026, 9, 14, 0, 0, tzinfo=UTC)),
+            window=timedelta(days=7),
+        ),
+    ]
+    if fable_pct is not None:
+        metrics.append(
+            UsageMetric("Fable", fable_pct,
+                        resets_at=_local_naive(datetime(2026, 9, 14, 0, 0, tzinfo=UTC)))
+        )
     return UsageSnapshot(
         provider="claude",
         status=SnapshotStatus.OK,
-        metrics=[
-            UsageMetric(
-                "Session", session_pct,
-                resets_at=_local_naive(datetime(2026, 9, 10, 16, 0, tzinfo=timezone.utc)),
-                window=timedelta(hours=5),
-            ),
-            UsageMetric(
-                "Weekly", weekly_pct,
-                resets_at=_local_naive(datetime(2026, 9, 14, 0, 0, tzinfo=timezone.utc)),
-                window=timedelta(days=7),
-            ),
-        ],
-        fetched_at=_local_naive(datetime(2026, 9, 10, 15, 55, tzinfo=timezone.utc)),
+        metrics=metrics,
+        fetched_at=_local_naive(datetime(2026, 9, 10, 15, 55, tzinfo=UTC)),
     )
 
 
@@ -70,7 +79,7 @@ def service(tmp_path):
     svc.shutdown()
 
 
-def _tab(qtbot, service, account_id="claude", snapshot=None, tmp_path=None):
+def _tab(qtbot, service, account_id="claude", snapshot=None):
     tab = UsageCostTab(
         service,
         account_id,
@@ -103,64 +112,101 @@ def test_dialog_without_usage_tab_is_unchanged(qtbot):
     assert "session vs weekly" in dialog.windowTitle()
 
 
-def test_dialog_with_usage_tab_opens_on_ratio_first(qtbot, service):
-    tab = _tab(qtbot, service)
-    dialog = RatioHistoryDialog("claude", "Claude", [], current_estimate=None, usage_tab=tab)
-    qtbot.addWidget(dialog)
+def test_dialog_opens_on_ratio_tab_unless_asked_for_usage(qtbot, service):
+    ratio_first = RatioHistoryDialog(
+        "claude", "Claude", [], current_estimate=None, usage_tab=_tab(qtbot, service)
+    )
+    usage_first = RatioHistoryDialog(
+        "claude", "Claude", [], current_estimate=None,
+        usage_tab=_tab(qtbot, service), open_usage_tab=True,
+    )
+    qtbot.addWidget(ratio_first)
+    qtbot.addWidget(usage_first)
 
-    assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] == [
-        "Session vs weekly", "Usage and cost",
-    ]
-    assert dialog.tabs.currentIndex() == 0
+    assert [ratio_first.tabs.tabText(i) for i in range(2)] == ["Session vs weekly", "Usage and cost"]
+    assert ratio_first.tabs.currentIndex() == 0
+    assert usage_first.tabs.currentIndex() == 1
 
 
-def test_empty_state_shows_unavailable_not_zero(qtbot, service):
+def test_empty_state_shows_not_available_rather_than_zero(qtbot, service):
     tab = _tab(qtbot, service, snapshot=_claude_snapshot())
 
     assert tab.updated_label.text() == "Not imported yet"
-    assert tab.window_cell_text("Session", "cost") == UNAVAILABLE
-    assert tab.window_cell_text("Weekly", "quota") == UNAVAILABLE
+    assert tab.card_text("Session", "cost") == UNAVAILABLE
+    assert tab.card_text("Weekly", "quota") == UNAVAILABLE
 
 
-def test_current_windows_show_cost_quota_and_per_point(qtbot, service):
+def test_cards_show_cost_allowance_and_cost_per_percent(qtbot, service):
     service.run_sync()
     tab = _tab(qtbot, service, snapshot=_claude_snapshot())
 
     # opus $0.025106 + sonnet $0.00342
-    assert tab.window_cell_text("Session", "cost") == "$0.03"
-    assert tab.window_cell_text("Session", "quota") == "20%"
-    assert tab.window_cell_text("Session", "output_per_point") == "57"
-    assert tab.window_cell_text("Weekly", "per_point") == "$0.00"
+    assert tab.card_text("Session", "cost") == "$0.03"
+    assert tab.card_text("Session", "quota") == "20% of allowance used"
+    assert tab.card_text("Weekly", "per_point") == "≈ $0.00 per 1%"
+    assert tab.card_text("Session", "title").startswith("This session · ")
+    assert tab.cards["Fable"].isHidden()
 
 
-def test_limit_reached_is_labelled(qtbot, service):
+def test_limit_reached_card_drops_cost_per_percent(qtbot, service):
     service.run_sync()
-    tab = _tab(qtbot, service, snapshot=_claude_snapshot(session_pct=100.0))
+    tab = _tab(qtbot, service, snapshot=_claude_snapshot(weekly_pct=100.0))
 
-    assert tab.window_cell_text("Session", "quota") == "100% (limit reached)"
-    assert "extra usage" in tab._window_cells[("Session", "quota")].toolTip()
+    assert tab.card_text("Weekly", "quota") == "100% · limit reached"
+    assert tab.card_text("Weekly", "per_point") == "No cost per 1% at the limit"
+    assert "extra usage" in tab.cards["Weekly"].labels["quota"].toolTip()
 
 
-def test_model_table_lists_models_sorted_by_cost_with_total(qtbot, service):
+def test_fable_card_counts_only_fable_models(qtbot, service):
+    service.run_sync()
+    with service.store.transaction() as conn:
+        service.store.upsert_claude_messages(conn, [ClaudeMessage(
+            "msg_F", "req_F", datetime(2026, 9, 10, 12, 30, tzinfo=UTC), "claude-fable-5-1",
+            TokenCounts(output=1_000_000), "standard", "standard", "2.1.268", False)])
+    tab = _tab(qtbot, service, snapshot=_claude_snapshot(fable_pct=50.0))
+
+    assert not tab.cards["Fable"].isHidden()
+    assert tab.card_text("Fable", "cost") == "$50.00"
+    assert tab.card_text("Fable", "quota") == "50% of Fable allowance used"
+    assert tab.card_text("Fable", "per_point") == "≈ $1.00 per 1%"
+    assert tab.card_text("Weekly", "cost") == "$50.03"
+
+
+def test_model_table_leads_with_cost_and_share(qtbot, service):
     service.run_sync()
     tab = _tab(qtbot, service, snapshot=_claude_snapshot())
 
     rows = _model_rows(tab)
-    assert [r[0] for r in rows] == ["claude-opus-5", "claude-sonnet-5", "Total"]
-    assert rows[0][1] == "3"
-    assert rows[-1][1] == "4"
+    assert [r[0] for r in rows] == ["● claude-opus-5", "● claude-sonnet-5", "Total"]
+    assert [tab.model_table.horizontalHeaderItem(i).text() for i in range(5)] == [
+        "Model", "Est. cost", "Share of cost", "Output", "Msgs",
+    ]
+    assert rows[0][4] == "3"
+    assert rows[-1][4] == "4"
+    share = tab.model_table.cellWidget(0, 2)
+    assert isinstance(share, _Bar) and share.label.endswith("%")
 
 
-def test_range_selector_covers_all_ranges(qtbot, service):
+def test_token_details_are_hidden_until_asked(qtbot, service):
     service.run_sync()
     tab = _tab(qtbot, service, snapshot=_claude_snapshot())
 
+    assert tab.model_table.isColumnHidden(6)
+    tab.token_details_cb.setChecked(True)
+    assert not tab.model_table.isColumnHidden(6)
+
+
+def test_range_selector_defaults_to_this_week_and_covers_all_ranges(qtbot, service):
+    service.run_sync()
+    tab = _tab(qtbot, service, snapshot=_claude_snapshot())
+
+    assert tab.range_combo.currentText() == "This week"
     assert [tab.range_combo.itemText(i) for i in range(tab.range_combo.count())] == [
         label for _key, label in RANGES
     ]
     for key, _label in RANGES:
         _select_range(tab, key)
-        assert _model_rows(tab)[0][0] == "claude-opus-5"
+        assert _model_rows(tab)[0][0] == "● claude-opus-5"
 
 
 def test_unpriced_models_show_no_price_and_sort_last(qtbot, service):
@@ -169,23 +215,44 @@ def test_unpriced_models_show_no_price_and_sort_last(qtbot, service):
     _select_range(tab, "30d")
 
     rows = _model_rows(tab)
-    names = [r[0] for r in rows]
-    assert names[-2:] == ["unknown", "Total"]
-    assert rows[-2][10] == "no price"
-    assert rows[-1][10].endswith("+ unpriced")
+    assert [r[0] for r in rows][-2:] == ["● unknown", "Total"]
+    assert rows[-2][1] == "no price"
+    assert rows[-1][1].endswith("+ unpriced")
 
 
-def test_clicking_a_day_filters_the_model_table(qtbot, service):
+def test_clicking_a_day_shows_its_models_with_a_removable_chip(qtbot, service):
+    service.run_sync()
+    tab = _tab(qtbot, service, snapshot=_claude_snapshot())
+    tab.show_view("day")
+    assert tab.daily_table.rowCount() == 1
+    assert "claude-opus-5" in tab.day_legend.text()
+
+    tab._on_day_clicked(0, 0)
+
+    assert tab.views.currentIndex() == 0
+    assert not tab.day_chip.isHidden()
+    assert _model_rows(tab)[0][0] == "● claude-opus-5"
+    tab.day_chip.click()
+    assert tab.day_chip.isHidden()
+
+
+def test_views_switch_with_their_own_controls(qtbot, service):
     service.run_sync()
     tab = _tab(qtbot, service, snapshot=_claude_snapshot())
 
-    assert tab.daily_table.rowCount() == 1
-    tab._on_day_clicked(0, 0)
+    assert [b.text() for b in tab.view_buttons.values()] == ["By model", "By day", "Trend"]
+    tab.show_view("trend")
+    assert tab.range_combo.isHidden()
+    assert not tab.trend_metric_combo.isHidden()
 
-    assert tab.range_combo.currentText().startswith("Day: ")
-    assert _model_rows(tab)[0][0] == "claude-opus-5"
-    _select_range(tab, "today")
-    assert tab.range_combo.findData("day") == -1
+
+def test_tables_fit_their_rows_instead_of_scrolling(qtbot, service):
+    service.run_sync()
+    tab = _tab(qtbot, service, snapshot=_claude_snapshot())
+
+    table = tab.model_table
+    rows_height = sum(table.rowHeight(r) for r in range(table.rowCount()))
+    assert table.height() >= rows_height
 
 
 def test_not_recognized_state_is_shown(qtbot, service):
@@ -194,7 +261,7 @@ def test_not_recognized_state_is_shown(qtbot, service):
     tab = _tab(qtbot, service, snapshot=_claude_snapshot())
 
     assert "weren't recognized" in tab.status_label.text()
-    assert tab.window_cell_text("Session", "cost") == UNAVAILABLE
+    assert tab.card_text("Session", "cost") == UNAVAILABLE
 
 
 def test_importing_marks_numbers_partial(qtbot, service, monkeypatch):
@@ -203,15 +270,17 @@ def test_importing_marks_numbers_partial(qtbot, service, monkeypatch):
     tab = _tab(qtbot, service, snapshot=_claude_snapshot())
 
     assert "partial" in tab.status_label.text()
-    assert tab.window_cell_text("Session", "cost").endswith("(partial)")
+    assert tab.card_text("Session", "cost").endswith("(partial)")
+    assert tab.importing_label.text().startswith("Importing")
 
 
 def test_dialog_renders_at_small_size(qtbot, service):
     service.run_sync()
-    tab = _tab(qtbot, service, snapshot=_claude_snapshot())
-    dialog = RatioHistoryDialog("claude", "Claude", [], current_estimate=None, usage_tab=tab)
+    tab = _tab(qtbot, service, snapshot=_claude_snapshot(fable_pct=40.0))
+    dialog = RatioHistoryDialog(
+        "claude", "Claude", [], current_estimate=None, usage_tab=tab, open_usage_tab=True
+    )
     qtbot.addWidget(dialog)
-    dialog.tabs.setCurrentIndex(1)
     dialog.resize(360, 320)
     dialog.show()
 
@@ -219,15 +288,17 @@ def test_dialog_renders_at_small_size(qtbot, service):
 
 
 def test_claude_window_starts_at_resets_minus_window():
-    windows = claude_windows_from_snapshot(_claude_snapshot())
+    windows = claude_windows_from_snapshot(_claude_snapshot(fable_pct=30.0))
 
-    assert windows["Session"].start == datetime(2026, 9, 10, 11, 0, tzinfo=timezone.utc)
-    assert windows["Weekly"].start == datetime(2026, 9, 7, 0, 0, tzinfo=timezone.utc)
-    assert windows["Session"].pct == 20.0
+    assert windows["Session"].start == datetime(2026, 9, 10, 11, 0, tzinfo=UTC)
+    assert windows["Weekly"].start == datetime(2026, 9, 7, 0, 0, tzinfo=UTC)
+    assert windows["Fable"].start == datetime(2026, 9, 7, 0, 0, tzinfo=UTC)
+    assert windows["Fable"].model_filter == "fable"
+    assert windows["Session"].model_filter is None
 
 
 def test_codex_windows_come_from_log_readings():
-    resets = datetime(2026, 9, 10, 19, 0, tzinfo=timezone.utc)
+    resets = datetime(2026, 9, 10, 19, 0, tzinfo=UTC)
     readings = [
         CodexQuotaReading(NOW - timedelta(hours=1), "codex", "primary", 4.0, 300, resets, "team"),
         CodexQuotaReading(NOW - timedelta(minutes=5), "codex", "primary", 7.0, 300, resets, "team"),
@@ -243,21 +314,20 @@ def test_codex_windows_come_from_log_readings():
     assert "Weekly" not in windows
 
 
-def test_formatting_helpers():
+def test_format_tokens_reads_large_counts():
     assert format_tokens(412) == "412"
     assert format_tokens(9_100) == "9.1K"
     assert format_tokens(151_000) == "151K"
     assert format_tokens(18_200_000) == "18.2M"
-    assert share_bar(None) == "n/a"
-    assert share_bar(0.5).startswith("50% █████")
+    assert format_tokens(6_887_700_000) == "6.9B"
 
 
-def test_details_menu_lists_claude_and_codex_accounts(qtbot):
+def test_details_menu_opens_the_usage_tab(qtbot):
     opened = []
     stub = SimpleNamespace(
         _config=Config(),
         _details_menu=QMenu(),
-        open_ratio_history=lambda account_id: opened.append(account_id),
+        open_ratio_history=lambda account_id, **kwargs: opened.append((account_id, kwargs)),
     )
 
     app_module.App._populate_details_menu(stub)
@@ -265,4 +335,4 @@ def test_details_menu_lists_claude_and_codex_accounts(qtbot):
     actions[0].trigger()
 
     assert [a.text() for a in actions] == ["Claude", "Codex"]
-    assert opened == ["claude"]
+    assert opened == [("claude", {"show_usage": True})]

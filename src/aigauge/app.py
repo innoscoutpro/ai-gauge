@@ -1013,7 +1013,7 @@ class App(QObject):
                 return metric.percent_used
         return None
 
-    def open_ratio_history(self, provider: str) -> None:
+    def open_ratio_history(self, provider: str, show_usage: bool = False) -> None:
         display_name = display_name_for_account(self._config, provider)
         usage_tab = None
         service = self._local_usage
@@ -1036,6 +1036,7 @@ class App(QObject):
             weekly_pct_used=self._current_weekly_pct(provider),
             parent=self._widget,
             usage_tab=usage_tab,
+            open_usage_tab=show_usage,
         )
         dlg.exec()
         if usage_tab is not None:
@@ -1058,7 +1059,7 @@ class App(QObject):
                 display_name_for_account(self._config, account.id),
                 # triggered passes `checked` first; keep it off account_id.
                 lambda _checked=False, account_id=account.id: self.open_ratio_history(
-                    account_id
+                    account_id, show_usage=True
                 ),
             )
 
