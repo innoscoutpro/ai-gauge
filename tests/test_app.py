@@ -468,7 +468,7 @@ def test_settings_leaves_widget_topmost_state_unchanged(monkeypatch):
             self.callback = callback
 
     class _SettingsDialog(_Dialog):
-        def __init__(self, config, parent=None):
+        def __init__(self, config, parent=None, local_usage_service=None):
             super().__init__()
             self.sign_in_clicked = _Signal()
             self.paste_cookie_clicked = _Signal()

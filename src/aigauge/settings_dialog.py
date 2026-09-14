@@ -30,6 +30,8 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QFrame,
+    QScrollArea,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -53,6 +55,7 @@ from .config import (
 )
 from .error_dialog import reveal_path
 from .icons import app_icon
+from .local_usage.settings_panel import LocalUsagePanel
 from .logging_setup import log_path
 from .providers.claude import CLAUDE_USAGE_URL
 from .providers.codex import CODEX_USAGE_URL
@@ -624,7 +627,7 @@ class SettingsDialog(QDialog):
     paste_cookie_clicked = pyqtSignal(str)  # provider name
     clear_sign_in_clicked = pyqtSignal(str)  # account id
 
-    def __init__(self, config: Config, parent=None):
+    def __init__(self, config: Config, parent=None, local_usage_service=None):
         # Don't pass parent — avoids any cascading stylesheet issues.
         # Keep window centered relative to parent manually if needed later.
         super().__init__(None)
@@ -1135,6 +1138,14 @@ class SettingsDialog(QDialog):
         tabs.addTab(copilot_tab, "GitHub Copilot")
         tabs.addTab(openrouter_tab, "OpenRouter")
         tabs.addTab(mcp_tab, "MCP")
+        self.local_usage_panel = LocalUsagePanel(
+            config, self._browser_accounts, local_usage_service
+        )
+        local_usage_scroll = QScrollArea()
+        local_usage_scroll.setWidgetResizable(True)
+        local_usage_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        local_usage_scroll.setWidget(self.local_usage_panel)
+        tabs.addTab(local_usage_scroll, "Local usage")
         tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         # ----- Brand header -----
@@ -1512,6 +1523,7 @@ class SettingsDialog(QDialog):
                 first_opencode.usage_url or OPENCODE_GO_USAGE_URL
             )
             config.opencode_go.colors = first_opencode.colors.model_copy(deep=True)
+        self.local_usage_panel.apply_to(config)
         # Persist all settings first: wiring up OS autostart can fail (e.g. a
         # rejected Task Scheduler entry), and that must neither lose the user's
         # other changes nor crash the app via an exception escaping this slot.

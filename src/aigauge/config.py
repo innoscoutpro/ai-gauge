@@ -176,6 +176,28 @@ MCP_PAUSE_MAX = 100
 McpPauseThreshold = Annotated[int, Field(ge=MCP_PAUSE_MIN, le=MCP_PAUSE_MAX)]
 
 
+class LocalUsageProviderConfig(BaseModel):
+    """Local log tracking for one provider (Claude Code or Codex)."""
+
+    enabled: bool = True
+    # All of this provider's local logs count against exactly this account,
+    # chosen by stable id. None, or an id that no longer exists, pauses
+    # tracking for the provider; it never falls over to another account.
+    account_id: str | None = None
+    # Override for the detected log folder. Claude: a `projects` folder.
+    # Codex: the Codex home folder that holds `sessions`.
+    log_root: str | None = None
+    # UTC ISO time set by "Start from now"; nothing older is imported.
+    start_from: str | None = None
+
+
+class LocalUsageConfig(BaseModel):
+    # Off by default. While off, no log file is read and nothing is written.
+    enabled: bool = False
+    claude: LocalUsageProviderConfig = Field(default_factory=LocalUsageProviderConfig)
+    codex: LocalUsageProviderConfig = Field(default_factory=LocalUsageProviderConfig)
+
+
 class Config(BaseModel):
     active_refresh_interval_minutes: int = Field(default=5, ge=1, le=180)
     refresh_interval_minutes: int = Field(default=60, ge=1, le=180)
@@ -208,6 +230,7 @@ class Config(BaseModel):
     mcp_enabled: bool = False
     # Account id -> percent used at which cooperating MCP clients should pause.
     mcp_pause_policies: dict[str, McpPauseThreshold] = Field(default_factory=dict)
+    local_usage: LocalUsageConfig = Field(default_factory=LocalUsageConfig)
     window: WindowState = Field(default_factory=WindowState)
 
     @classmethod

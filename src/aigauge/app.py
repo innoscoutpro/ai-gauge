@@ -211,6 +211,9 @@ def _flush_log_handlers() -> None:
 class App(QObject):
     """Main application controller — owns the widget, providers, refresh timer, tray."""
 
+    # Class-level default so App stubs built without __init__ read None.
+    _local_usage = None
+
     def __init__(self):
         super().__init__()
         setup_logging()
@@ -230,6 +233,9 @@ class App(QObject):
         self._cleared_sessions: set[str] = set()
         self._history = HistoryStore()
         self._ratio = RatioStore()
+        # Created only while local usage tracking is on; see _sync_local_usage.
+        self._local_usage = None
+        self._sync_local_usage()
         self._signals = ProviderSignals()
         self._signals.snapshot_ready.connect(self._on_snapshot)
         self._inflight: set[str] = set()
@@ -336,6 +342,7 @@ class App(QObject):
         if qt_app is not None:
             qt_app.aboutToQuit.connect(self._log_about_to_quit)
             qt_app.aboutToQuit.connect(self._invalidate_usage_cache)
+            qt_app.aboutToQuit.connect(self._shutdown_local_usage)
         atexit.register(self._log_atexit)
         atexit.register(self._invalidate_usage_cache)
 
@@ -655,8 +662,9 @@ class App(QObject):
                 sorted(snapshot.raw.keys()) if snapshot.raw else [],
                 _raw_summary(snapshot.raw) if snapshot.raw else "{}",
             )
+        closed_periods = []
         try:
-            self._history.record_snapshot(snapshot)
+            closed_periods = self._history.record_snapshot(snapshot)
         except Exception:  # noqa: BLE001
             log.exception("history.record_snapshot failed")
         try:
@@ -674,6 +682,10 @@ class App(QObject):
             )
         except Exception:  # noqa: BLE001
             log.exception("widget.set_ratio failed")
+        try:
+            self._local_usage_on_snapshot(snapshot, closed_periods)
+        except Exception:  # noqa: BLE001
+            log.exception("local usage snapshot hook failed")
 
         if self._refresh_queue:
             QTimer.singleShot(0, self._start_next_refresh)
@@ -1011,6 +1023,81 @@ class App(QObject):
         )
         dlg.exec()
 
+    # ----- Local usage -----
+
+    def _sync_local_usage(self, old_local_usage=None) -> None:
+        """Start or stop local usage tracking to match the saved settings.
+
+        While tracking is off nothing is created: no database, no worker, and
+        no log file is opened.
+        """
+        if not self._config.local_usage.enabled:
+            if self._local_usage is not None:
+                self._local_usage.shutdown()
+                self._local_usage.deleteLater()
+                self._local_usage = None
+            return
+        from .local_usage.service import (
+            BACKFILL,
+            LocalUsageService,
+            assigned_account,
+        )
+        from .local_usage.store import PROVIDERS
+
+        if self._local_usage is None:
+            try:
+                self._local_usage = LocalUsageService(self._config)
+            except Exception:  # noqa: BLE001
+                log.exception("local usage tracking could not start")
+                return
+        if old_local_usage is None or old_local_usage == self._config.local_usage:
+            return
+        before = self._config.model_copy(update={"local_usage": old_local_usage})
+        newly_tracked = tuple(
+            provider
+            for provider in PROVIDERS
+            if assigned_account(self._config, provider) is not None
+            and assigned_account(before, provider) is None
+        )
+        service = self._local_usage
+        fresh = tuple(
+            provider
+            for provider in newly_tracked
+            if service.store.source_file_count(provider) == 0
+            and getattr(self._config.local_usage, provider).start_from is None
+        )
+        if not fresh:
+            service.request_import()
+            return
+        from .local_usage import enable_dialog
+        from .local_usage.importer import provider_roots, scan_provider
+
+        scans = [
+            scan_provider(
+                provider,
+                provider_roots(provider, getattr(self._config.local_usage, provider).log_root),
+            )
+            for provider in fresh
+        ]
+        choice = enable_dialog.ask_backfill(self._widget, scans)
+        if choice == enable_dialog.IMPORT_HISTORY:
+            service.request_import(BACKFILL)
+        else:
+            service.start_from_now(fresh)
+            service.request_import()
+
+    def _local_usage_on_snapshot(self, snapshot: UsageSnapshot, closed_periods) -> None:
+        service = self._local_usage
+        if service is None or snapshot.status != SnapshotStatus.OK:
+            return
+        if service.provider_for_account(snapshot.provider) is None:
+            return
+        service.request_import()
+
+    def _shutdown_local_usage(self) -> None:
+        if self._local_usage is not None:
+            self._local_usage.shutdown()
+
     # ----- Settings -----
 
     def set_instance_lock(self, lock: QLockFile | None) -> None:
@@ -1048,7 +1135,11 @@ class App(QObject):
             return
         old_copilot_quota = self._config.copilot.monthly_quota
         old_openrouter_budget = self._config.openrouter.daily_budget
-        dlg = SettingsDialog(self._config, parent=self._widget)
+        dlg = SettingsDialog(
+            self._config,
+            parent=self._widget,
+            local_usage_service=self._local_usage,
+        )
         dlg.setModal(False)
         dlg.setWindowModality(Qt.WindowModality.NonModal)
         dlg.sign_in_clicked.connect(self.open_login)
@@ -1088,8 +1179,13 @@ class App(QObject):
         self._settings_old_copilot_quota = None
         accepted = result == QDialog.DialogCode.Accepted.value
         if accepted:
+            old_local_usage = self._config.local_usage.model_copy(deep=True)
             dlg.apply_to(self._config)
             self._build_providers()
+            try:
+                self._sync_local_usage(old_local_usage)
+            except Exception:  # noqa: BLE001
+                log.exception("local usage settings change failed")
             self._widget.apply_window_settings()
             self._widget.show()
             # Copilot's metric label bakes the quota into the displayed string.

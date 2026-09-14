@@ -52,6 +52,25 @@ class TokenCounts:
         return out
 
 
+# Prompt size above which a request is stored in the "long" price bucket.
+# Storage needs a fixed boundary so history can be repriced later; the rate
+# table decides whether a long bucket actually costs more. OpenAI surcharges
+# prompts above 272K input tokens; Claude has no surcharge today, and 200K is
+# where its older long-context pricing started.
+LONG_CONTEXT_THRESHOLDS = {"claude": 200_000, "codex": 272_000}
+
+
+def price_variant(provider: str, tokens: TokenCounts, speed: str | None = None) -> str:
+    """Price bucket for one request: "", "fast", "long" or "fast+long"."""
+    parts = []
+    if speed == "fast":
+        parts.append("fast")
+    threshold = LONG_CONTEXT_THRESHOLDS.get(provider)
+    if threshold is not None and tokens.total_input() > threshold:
+        parts.append("long")
+    return "+".join(parts)
+
+
 def as_int(value: object) -> int:
     """Coerce a log token field to a non-negative int; anything else is 0."""
     if isinstance(value, bool):
