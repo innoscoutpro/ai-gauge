@@ -1126,6 +1126,43 @@ class App(QObject):
             service.start_from_now(fresh)
             service.request_import()
 
+    def _import_local_usage_from_settings(self, panel) -> None:
+        """Import history from the open Settings dialog, without waiting for OK.
+
+        Saves the tab's local usage choices and starts tracking first, so the
+        import runs and shows progress while Settings stays open.
+        """
+        panel.apply_to(self._config)
+        try:
+            self._config.save()
+        except OSError:
+            log.exception("failed to save local usage settings")
+        self._sync_local_usage()
+        service = self._local_usage
+        if service is None:
+            return
+        panel.set_service(service)
+        service.import_history()
+
+    def _clear_local_usage_from_settings(self, panel) -> None:
+        service = self._local_usage
+        if service is not None:
+            service.clear_data()
+            # Keep tracking without silently re-reading every log.
+            service.start_from_now()
+        else:
+            from .local_usage.store import DB_FILENAME
+
+            database = app_data_dir() / DB_FILENAME
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    database.with_name(database.name + suffix).unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    log.exception("could not delete local usage database")
+        panel.after_clear()
+
     def _local_usage_on_snapshot(self, snapshot: UsageSnapshot, closed_periods) -> None:
         service = self._local_usage
         if service is None or snapshot.status != SnapshotStatus.OK:
@@ -1193,6 +1230,14 @@ class App(QObject):
         dlg.sign_in_clicked.connect(self.open_login)
         dlg.paste_cookie_clicked.connect(self.open_cookie_paste)
         dlg.clear_sign_in_clicked.connect(self.clear_sign_in)
+        panel = getattr(dlg, "local_usage_panel", None)
+        if panel is not None:
+            panel.import_history_requested.connect(
+                lambda panel=panel: self._import_local_usage_from_settings(panel)
+            )
+            panel.clear_data_requested.connect(
+                lambda panel=panel: self._clear_local_usage_from_settings(panel)
+            )
         dlg.finished.connect(
             lambda result, dialog=dlg, old_quota=old_copilot_quota, old_budget=old_openrouter_budget: (
                 self._on_settings_finished(dialog, result, old_quota, old_budget)

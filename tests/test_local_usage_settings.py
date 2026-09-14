@@ -3,6 +3,7 @@ import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from PyQt6.QtWidgets import QTabWidget
 
 from aigauge import app as app_module
@@ -31,7 +32,7 @@ def test_tracking_is_off_by_default_and_reads_nothing(qtbot, monkeypatch):
     panel = _panel(qtbot, Config())
 
     assert not panel.enabled_cb.isChecked()
-    assert panel.status_text("claude") == "Off. No log files are read."
+    assert panel.status_text("claude") == "Off. No logs are read."
     assert not panel.import_btn.isEnabled()
 
 
@@ -149,3 +150,76 @@ def test_turning_tracking_on_asks_about_history(tmp_path, monkeypatch):
     finally:
         if stub._local_usage is not None:
             stub._local_usage.shutdown()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path, monkeypatch):
+    # app_data_dir() follows HOME / XDG_CONFIG_HOME off Windows.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+
+def test_import_button_enables_with_tracking_and_emits(qtbot):
+    panel = _panel(qtbot, Config())
+    assert not panel.import_btn.isEnabled()
+
+    panel.enabled_cb.setChecked(True)
+
+    assert panel.import_btn.isEnabled()
+    with qtbot.waitSignal(panel.import_history_requested):
+        panel.import_btn.click()
+
+
+def test_clear_button_needs_imported_data(qtbot):
+    panel = _panel(qtbot, Config())
+    assert not panel.clear_btn.isEnabled()
+
+    app_data_dir().mkdir(parents=True, exist_ok=True)
+    (app_data_dir() / "local_usage.sqlite").write_bytes(b"")
+    panel.enabled_cb.setChecked(True)
+
+    assert panel.clear_btn.isEnabled()
+
+
+def test_import_from_settings_starts_tracking_without_waiting_for_ok(qtbot, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    shutil.copytree(FIXTURES / "claude" / "projects", root)
+    config = Config()
+    panel = _panel(qtbot, config)
+    panel.enabled_cb.setChecked(True)
+    panel.controls["claude"].folder_edit.setText(str(root))
+    panel.controls["codex"].enabled_cb.setChecked(False)
+    imported = []
+    monkeypatch.setattr(
+        "aigauge.local_usage.service.LocalUsageService.import_history",
+        lambda self, providers=("claude", "codex"): imported.append(True),
+    )
+    monkeypatch.setattr(
+        enable_dialog, "ask_backfill",
+        lambda *_args: pytest.fail("importing from Settings must not prompt"),
+    )
+    stub = _app_stub(config)
+    stub._sync_local_usage = lambda old=None: app_module.App._sync_local_usage(stub, old)
+
+    app_module.App._import_local_usage_from_settings(stub, panel)
+    try:
+        assert config.local_usage.enabled
+        assert Config.load().local_usage.enabled
+        assert imported == [True]
+        assert panel._service is stub._local_usage
+        assert panel.clear_btn.isEnabled()
+        assert "imported" in panel.status_text("claude") or "not imported yet" in panel.status_text("claude")
+    finally:
+        stub._local_usage.shutdown()
+
+
+def test_clear_from_settings_without_tracking_deletes_database(qtbot):
+    database = app_data_dir() / "local_usage.sqlite"
+    database.parent.mkdir(parents=True, exist_ok=True)
+    database.write_bytes(b"")
+    panel = _panel(qtbot, Config())
+
+    app_module.App._clear_local_usage_from_settings(_app_stub(Config()), panel)
+
+    assert not database.exists()
+    assert not panel.clear_btn.isEnabled()

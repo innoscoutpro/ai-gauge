@@ -137,7 +137,8 @@ def test_limit_reached_is_labelled(qtbot, service):
     service.run_sync()
     tab = _tab(qtbot, service, snapshot=_claude_snapshot(session_pct=100.0))
 
-    assert "extra usage possible" in tab.window_cell_text("Session", "quota")
+    assert tab.window_cell_text("Session", "quota") == "100% (limit reached)"
+    assert "extra usage" in tab._window_cells[("Session", "quota")].toolTip()
 
 
 def test_model_table_lists_models_sorted_by_cost_with_total(qtbot, service):
@@ -192,7 +193,7 @@ def test_not_recognized_state_is_shown(qtbot, service):
     service.store.set_meta("recognized:claude", False)
     tab = _tab(qtbot, service, snapshot=_claude_snapshot())
 
-    assert "not recognized" in tab.status_label.text()
+    assert "weren't recognized" in tab.status_label.text()
     assert tab.window_cell_text("Session", "cost") == UNAVAILABLE
 
 

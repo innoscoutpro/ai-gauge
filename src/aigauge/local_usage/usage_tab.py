@@ -59,6 +59,12 @@ RANGES = (
 DAILY_DAYS = 30
 UNAVAILABLE = "unavailable"
 FOOTER_TEXT = "This computer's logs only · API-equivalent estimate"
+_WINDOW_ROW_TIPS = {
+    "cost": "What this window's usage so far would cost at API prices.",
+    "quota": "The allowance used, from the latest reading.",
+    "per_point": "Estimated cost for each 1% of the allowance used.",
+    "output_per_point": "Output tokens for each 1% of the allowance used.",
+}
 
 MODEL_COLORS = (
     "#60a5fa", "#f59e0b", "#34d399", "#f472b6",
@@ -75,7 +81,7 @@ MODEL_COLUMNS = (
     ("cache_write_5m", "Cache 5m", True),
     ("cache_write_1h", "Cache 1h", True),
     ("reasoning", "Reasoning", True),
-    ("sidechain", "Subagent out", True),
+    ("sidechain", "Subagent %", True),
     ("cost", "Est. cost", False),
     ("share", "Share", False),
 )
@@ -125,37 +131,32 @@ def _signed_percent(change: float) -> str:
 
 
 def trend_summary_text(report: TrendReport) -> str:
-    """The baseline and change line above the trend table."""
+    """The comparison line above the trend table."""
     current = report.current
     if current is None:
-        return "No comparable completed windows yet."
+        return "No completed windows to compare yet."
     if report.collecting:
-        return f"Collecting windows ({report.output_baseline.windows} of {BASELINE_MIN_WINDOWS})."
-    parts = []
+        return (
+            f"Needs {BASELINE_MIN_WINDOWS} earlier completed windows to compare; "
+            f"{report.output_baseline.windows} so far."
+        )
+    lines = []
     dollars = report.dollars_baseline
     if report.dollars_change is not None and current.dollars_per_point is not None:
-        parts.append(
-            f"$/pt {format_cost(current.dollars_per_point)} vs median "
-            f"{format_cost(dollars.median)} of {dollars.windows} earlier windows "
-            f"(range {format_cost(dollars.low)} to {format_cost(dollars.high)}): "
-            f"{_signed_percent(report.dollars_change)}"
+        lines.append(
+            f"Cost per 1%: {format_cost(current.dollars_per_point)} in the latest window, "
+            f"{_signed_percent(report.dollars_change)} vs the typical "
+            f"{format_cost(dollars.median)} ({dollars.windows} earlier windows ranged "
+            f"{format_cost(dollars.low)} to {format_cost(dollars.high)})."
         )
     output = report.output_baseline
     if report.output_change is not None and current.output_per_point is not None:
-        parts.append(
-            f"output tok/pt {format_tokens(current.output_per_point)} vs median "
-            f"{format_tokens(output.median)} of {output.windows} earlier windows: "
-            f"{_signed_percent(report.output_change)}"
+        lines.append(
+            f"Output per 1%: {format_tokens(current.output_per_point)}, "
+            f"{_signed_percent(report.output_change)} vs the typical "
+            f"{format_tokens(output.median)}."
         )
-    pooled = []
-    if report.pooled_dollars_per_point is not None:
-        pooled.append(format_cost(report.pooled_dollars_per_point) + "/pt")
-    if report.pooled_output_per_point is not None:
-        pooled.append(format_tokens(report.pooled_output_per_point) + " output tok/pt")
-    text = "Latest window: " + "; ".join(parts) if parts else "Latest window counted."
-    if pooled:
-        text += "\nAll counted windows: " + " · ".join(pooled)
-    return text
+    return "\n".join(lines) if lines else "Not enough priced windows to compare cost yet."
 
 
 class _StackedBar(QWidget):
@@ -325,8 +326,8 @@ class UsageCostTab(QWidget):
         rows = (
             ("cost", "Est. API cost"),
             ("quota", "Quota used"),
-            ("per_point", "$ per point"),
-            ("output_per_point", "Output tok/pt"),
+            ("per_point", "Cost per 1%"),
+            ("output_per_point", "Output per 1%"),
         )
         for col, metric in enumerate((SESSION, WEEKLY), start=1):
             header = QLabel(metric)
@@ -335,6 +336,7 @@ class UsageCostTab(QWidget):
             self._window_headers[metric] = header
         for row, (key, label) in enumerate(rows, start=1):
             name = QLabel(label)
+            name.setToolTip(_WINDOW_ROW_TIPS.get(key, ""))
             name.setStyleSheet("color:#9ca3af; font-size:11px;")
             grid.addWidget(name, row, 0)
             for col, metric in enumerate((SESSION, WEEKLY), start=1):
@@ -367,17 +369,15 @@ class UsageCostTab(QWidget):
         self.trend_summary_label.setStyleSheet("color:#e5e7eb; font-size:11px;")
         layout.addWidget(self.trend_summary_label)
         self.trend_table = _table(
-            ["Window", "Est. cost", "Quota", "$/pt", "Output tok/pt",
-             "Cache share", "Top model", "Origin", "Status"]
+            ["Window", "Est. cost", "Quota", "Cost/1%", "Output/1%",
+             "Cache share", "Top model", "Source", "Status"]
         )
         self.trend_table.setObjectName("usage_trend_table")
         self.trend_table.setMinimumHeight(160)
         layout.addWidget(self.trend_table, 1)
         note = QLabel(
-            "Compares this computer's recorded activity with the account's usage "
-            "percentage. A different cache or model mix moves $/pt without any change "
-            "to the allowance, so check cache share and top model before reading "
-            "anything into a change."
+            "A change in cache use or model mix moves cost per 1% even when the "
+            "allowance hasn't changed; check those columns before reading into a change."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color:#6b7280; font-size:10px;")
@@ -424,11 +424,14 @@ class UsageCostTab(QWidget):
         recognized = store.get_meta(f"recognized:{provider}")
         notes = []
         if recognized is False:
-            notes.append("Logs found, usage not recognized. Numbers are unavailable.")
+            notes.append(
+                "These logs weren't recognized, so usage can't be shown. "
+                "An AI Gauge update may be needed."
+            )
         if running:
-            notes.append("Importing: numbers are partial until it finishes.")
+            notes.append("Import in progress; numbers are partial until it finishes.")
         if self._rates.errors:
-            notes.append("Some prices could not be loaded; see the log for details.")
+            notes.append("Some prices failed to load; those models show \"no price\".")
         self.status_label.setText(" ".join(notes))
         self.status_label.setVisible(bool(notes))
 
@@ -457,10 +460,15 @@ class UsageCostTab(QWidget):
         suffix = " (partial)" if partial else ""
         cells["cost"].setText(format_total_cost(summary) + suffix)
         pct = spec.pct
+        cells["quota"].setToolTip("")
         if pct is None:
             cells["quota"].setText(UNAVAILABLE)
         elif pct >= 100:
-            cells["quota"].setText(f"{pct:.0f}% (limit reached, extra usage possible)")
+            cells["quota"].setText(f"{pct:.0f}% (limit reached)")
+            cells["quota"].setToolTip(
+                "Usage past the limit may be billed as extra usage, so cost per 1% "
+                "isn't meaningful for this window."
+            )
         else:
             cells["quota"].setText(f"{pct:.0f}%")
         if pct is None or pct < MIN_COUNTABLE_PCT or spec.last_reading_at is None:
@@ -471,7 +479,7 @@ class UsageCostTab(QWidget):
             store.usage_by_model(self._provider, spec.start, spec.last_reading_at), self._rates
         )
         cells["per_point"].setText(
-            "n/a (unpriced usage)" if at_reading.has_unpriced
+            "no price" if at_reading.has_unpriced
             else format_cost(at_reading.priced_cost / pct)
         )
         cells["output_per_point"].setText(format_tokens(at_reading.tokens.output / pct))
@@ -518,7 +526,7 @@ class UsageCostTab(QWidget):
         usage = self._range_usage(key, now, windows) if available else None
         if usage is None:
             table.setRowCount(1)
-            table.setItem(0, 0, _item("Usage unavailable for this range.", align_right=False, muted=True))
+            table.setItem(0, 0, _item("Nothing to show for this range yet.", align_right=False, muted=True))
             return
         summary = summarize_costs(usage, self._rates)
         self._assign_colors(summary)
@@ -651,9 +659,9 @@ class UsageCostTab(QWidget):
         table.setRowCount(len(report.rows))
         for row_index, row in enumerate(report.rows):
             summary = row.summary
-            status = "counted" if row.counted else row.reason
+            status = "included" if row.counted else f"skipped: {row.reason}"
             if row.counted and row.dollars_reason != COUNTED:
-                status = f"counted ($/pt left out: {row.dollars_reason})"
+                status = f"included; cost not compared, {row.dollars_reason}"
             cells = (
                 window_label(summary.window_start, summary.resets_at),
                 format_total_cost(row.cost),
@@ -662,7 +670,7 @@ class UsageCostTab(QWidget):
                 format_tokens(row.output_per_point) if row.output_per_point is not None else "n/a",
                 f"{100 * row.cache_share:.0f}%" if row.cache_share is not None else "n/a",
                 row.top_model or "n/a",
-                "backfill" if summary.origin == ORIGIN_BACKFILL else "live",
+                "from history" if summary.origin == ORIGIN_BACKFILL else "tracked",
                 status,
             )
             for col, text in enumerate(cells):

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -21,29 +21,31 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ..config import BrowserAccount, Config, LocalUsageProviderConfig, account_display_name
+from ..config import (
+    BrowserAccount,
+    Config,
+    LocalUsageProviderConfig,
+    account_display_name,
+    app_data_dir,
+)
 from .formats import untested_versions
 from .importer import provider_roots, scan_provider
-from .store import CLAUDE, CODEX, PROVIDERS
+from .store import CLAUDE, CODEX, DB_FILENAME, PROVIDERS
 
 PROVIDER_TITLES = {CLAUDE: "Claude Code", CODEX: "Codex"}
 
 SETTINGS_DISCLOSURE = (
-    "Reads the Claude Code and Codex log files on this computer to estimate usage and "
-    "API-equivalent cost. Only token counts, models and times are kept, never prompts "
-    "or responses. Nothing is uploaded.",
-    "Includes only activity recorded on this computer. Browser chats, cloud tasks and "
-    "other computers use the same allowance but are not counted. Claude Code deletes "
-    "its logs after 30 days by default; AI Gauge keeps its own summary once imported.",
-    "Costs are estimates at current API prices, not charges. Trends compare this "
-    "computer's recorded activity with the account's usage percentage; they cannot "
-    "confirm a provider changed its limits.",
+    "Estimates what your Claude Code and Codex use would cost at API prices, from the "
+    "logs on this computer. Only token counts, models and times are kept, and nothing "
+    "is uploaded. Costs are estimates, not charges.",
+    "Only this computer is counted: browser chats, cloud tasks and other computers use "
+    "the same allowance but don't show up here. Claude Code deletes its logs after 30 "
+    "days; AI Gauge keeps what it has imported.",
 )
 
 ACCOUNT_DISCLOSURE = (
-    "All of this provider's logs on this computer are counted against the selected "
-    "account. If you also use other accounts or API keys here, the trend will be "
-    "unreliable."
+    "All logs on this computer count toward the chosen account. If you also use other "
+    "accounts or API keys here, cost per 1% will be skewed."
 )
 
 
@@ -66,6 +68,10 @@ def relative_time(when: datetime | None, now: datetime | None = None) -> str:
     if seconds < 86400:
         return f"{seconds // 3600}h ago"
     return when.astimezone().strftime("%b %d")
+
+
+def database_file() -> Path:
+    return app_data_dir() / DB_FILENAME
 
 
 class _ProviderControls(QGroupBox):
@@ -117,6 +123,7 @@ class _ProviderControls(QGroupBox):
         self.browse_btn.clicked.connect(self._browse)
         folder_row.addWidget(self.browse_btn)
         self.reset_btn = QPushButton("Reset")
+        self.reset_btn.setToolTip("Use the detected folder")
         self.reset_btn.clicked.connect(lambda: self.folder_edit.setText(""))
         folder_row.addWidget(self.reset_btn)
         layout.addLayout(folder_row)
@@ -147,6 +154,9 @@ class _ProviderControls(QGroupBox):
     def log_root(self) -> str | None:
         return self.folder_edit.text().strip() or None
 
+    def is_ready(self) -> bool:
+        return self.enabled_cb.isChecked() and self.selected_account_id() is not None
+
     def apply_to(self, settings: LocalUsageProviderConfig) -> None:
         settings.enabled = self.enabled_cb.isChecked()
         settings.account_id = self.selected_account_id()
@@ -158,6 +168,11 @@ class _ProviderControls(QGroupBox):
 
 
 class LocalUsagePanel(QWidget):
+    # Handled by the app, which saves these settings and starts tracking first,
+    # so neither action waits for the Settings dialog to be closed with OK.
+    import_history_requested = pyqtSignal()
+    clear_data_requested = pyqtSignal()
+
     def __init__(
         self,
         config: Config,
@@ -167,7 +182,7 @@ class LocalUsagePanel(QWidget):
     ):
         super().__init__(parent)
         self._config = config
-        self._service = service
+        self._service = None
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
@@ -184,7 +199,7 @@ class LocalUsagePanel(QWidget):
                 provider, getattr(config.local_usage, provider), accounts, self
             )
             controls.enabled_cb.toggled.connect(self._sync_enabled)
-            controls.account_combo.currentIndexChanged.connect(self.refresh_status)
+            controls.account_combo.currentIndexChanged.connect(self._sync_enabled)
             controls.folder_edit.textChanged.connect(self.refresh_status)
             self.controls[provider] = controls
             layout.addWidget(controls)
@@ -193,11 +208,19 @@ class LocalUsagePanel(QWidget):
         actions = QHBoxLayout()
         self.import_btn = QPushButton("Import history")
         self.import_btn.setObjectName("local_usage_import_btn")
-        self.import_btn.clicked.connect(self._import_history)
+        self.import_btn.setToolTip(
+            "Turns tracking on with these settings and imports everything your logs "
+            "still hold, in the background."
+        )
+        self.import_btn.clicked.connect(self.import_history_requested.emit)
         actions.addWidget(self.import_btn)
-        self.clear_btn = QPushButton("Clear local usage data")
+        self.clear_btn = QPushButton("Clear imported data")
         self.clear_btn.setObjectName("local_usage_clear_btn")
-        self.clear_btn.clicked.connect(self._clear_data)
+        self.clear_btn.setToolTip(
+            "Deletes the usage AI Gauge has imported. Your Claude Code and Codex logs "
+            "are not touched."
+        )
+        self.clear_btn.clicked.connect(self._confirm_clear)
         actions.addWidget(self.clear_btn)
         actions.addStretch(1)
         layout.addLayout(actions)
@@ -208,6 +231,7 @@ class LocalUsagePanel(QWidget):
         self.progress_bar.setTextVisible(True)
         progress_row.addWidget(self.progress_bar, 1)
         self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setToolTip("Stop the import. It picks up where it left off next time.")
         self.cancel_btn.clicked.connect(self._cancel_import)
         progress_row.addWidget(self.cancel_btn)
         self._progress_widget = QWidget()
@@ -215,38 +239,45 @@ class LocalUsagePanel(QWidget):
         self._progress_widget.setVisible(False)
         layout.addWidget(self._progress_widget)
 
-        self.saved_hint = _hint(
-            "Import and clear act on saved settings. Turn tracking on and press OK first."
-        )
-        layout.addWidget(self.saved_hint)
         self.rates_label = _hint("")
         self.rates_label.setObjectName("local_usage_rates")
-        self.rates_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.rates_label)
         layout.addStretch(1)
-        try:
-            from .rates import load_rate_table
-
-            table = load_rate_table()
-            self.set_rates_text(
-                f"{table.describe()}. Optional price override file: {table.override_path}"
-            )
-        except Exception:  # noqa: BLE001
-            self.set_rates_text("Rate table unavailable.")
+        self._load_rates_text()
 
         self.enabled_cb.toggled.connect(self._sync_enabled)
         if service is not None:
-            service.progress_changed.connect(self._on_progress)
-            service.import_started.connect(lambda _kind: self._on_progress(*service.progress()))
-            service.import_finished.connect(self._on_finished)
-            if service.is_running():
-                self._on_progress(*service.progress())
+            self.set_service(service)
         self._sync_enabled()
 
     # ---- state ----
 
-    def _service_active(self) -> bool:
-        return self._service is not None and self._config.local_usage.enabled
+    def set_service(self, service) -> None:
+        """Attach the running import service (also after starting it from here)."""
+        if service is self._service:
+            return
+        self._service = service
+        service.progress_changed.connect(self._on_progress)
+        service.import_started.connect(self._on_started)
+        service.import_finished.connect(self._on_finished)
+        if service.is_running():
+            self._on_progress(*service.progress())
+        self._sync_enabled()
+
+    def _load_rates_text(self) -> None:
+        try:
+            from .rates import load_rate_table
+
+            table = load_rate_table()
+        except Exception:  # noqa: BLE001
+            self.rates_label.setText("Prices unavailable.")
+            return
+        text = f"Prices as of {table.version} ({table.currency})"
+        if table.override_models:
+            count = len(table.override_models)
+            text += f", with {count} custom price{'s' if count != 1 else ''}"
+        self.rates_label.setText(text + ".")
+        self.rates_label.setToolTip(f"Custom prices can be added in {table.override_path}")
 
     def _sync_enabled(self) -> None:
         on = self.enabled_cb.isChecked()
@@ -256,10 +287,8 @@ class LocalUsagePanel(QWidget):
             for widget in (controls.account_combo, controls.folder_edit,
                            controls.browse_btn, controls.reset_btn):
                 widget.setEnabled(on and tracked)
-        active = self._service_active()
-        self.import_btn.setEnabled(active)
-        self.clear_btn.setEnabled(active)
-        self.saved_hint.setVisible(not active)
+        self.import_btn.setEnabled(on and any(c.is_ready() for c in self.controls.values()))
+        self.clear_btn.setEnabled(self._service is not None or database_file().exists())
         self.refresh_status()
 
     def refresh_status(self) -> None:
@@ -269,13 +298,13 @@ class LocalUsagePanel(QWidget):
     def status_text(self, provider: str) -> str:
         controls = self.controls[provider]
         if not self.enabled_cb.isChecked():
-            return "Off. No log files are read."
+            return "Off. No logs are read."
         if not controls.enabled_cb.isChecked():
             return "Not tracked."
         notes = []
         if controls.selected_account_id() is None:
             notes.append(
-                "Paused: the assigned account was removed. Choose an account."
+                "Paused: the chosen account was removed. Pick another."
                 if controls.missing_account
                 else "Choose an account to start tracking."
             )
@@ -283,20 +312,21 @@ class LocalUsagePanel(QWidget):
         if not scan.files:
             notes.append("No logs found in this folder.")
             return " ".join(notes)
-        parts = [f"{len(scan.files)} files", f"logs from {scan.oldest_mtime.astimezone():%b %d}"]
-        if self._service_active():
+        parts = [
+            f"{len(scan.files)} log files",
+            f"oldest from {scan.oldest_mtime.astimezone():%b %d}",
+        ]
+        if self._service is not None:
             store = self._service.store
-            parts.append(f"last import {relative_time(store.last_import(provider))}")
+            last = store.last_import(provider)
+            parts.append("not imported yet" if last is None else f"imported {relative_time(last)}")
             if store.get_meta(f"recognized:{provider}") is False:
-                notes.append("Logs found, usage not recognized.")
+                notes.append("These logs weren't recognized. An AI Gauge update may be needed.")
             untested = untested_versions(provider, store.get_meta(f"versions:{provider}", {}))
             if untested:
                 shown = ", ".join(untested[-3:])
-                notes.append(f"Note: CLI versions not yet tested ({shown}); importing continues.")
+                notes.append(f"Untested CLI version ({shown}); numbers may be off.")
         return " · ".join(parts) + ("\n" + " ".join(notes) if notes else "")
-
-    def set_rates_text(self, text: str) -> None:
-        self.rates_label.setText(text)
 
     def apply_to(self, config: Config) -> None:
         config.local_usage.enabled = self.enabled_cb.isChecked()
@@ -305,30 +335,26 @@ class LocalUsagePanel(QWidget):
 
     # ---- actions ----
 
-    def _import_history(self) -> None:
-        if self._service_active():
-            self._service.import_history()
-
     def _cancel_import(self) -> None:
         if self._service is not None:
             self._service.cancel()
 
-    def _clear_data(self) -> None:
-        if not self._service_active():
-            return
+    def _confirm_clear(self) -> None:
         answer = QMessageBox.question(
             self,
-            "Clear local usage data",
-            "Delete AI Gauge's local usage database? CLI logs, sign-ins, and the "
-            "existing usage history are not touched. Tracking continues from now; "
-            "Import history can read the logs again.",
+            "Clear imported data",
+            "Delete the usage AI Gauge has imported? Your Claude Code and Codex logs "
+            "are not touched, and Import history can read them again.",
         )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        self._service.clear_data()
-        self._service.start_from_now()
+        if answer == QMessageBox.StandardButton.Yes:
+            self.clear_data_requested.emit()
+
+    def after_clear(self) -> None:
         self._progress_widget.setVisible(False)
-        self.refresh_status()
+        self._sync_enabled()
+
+    def _on_started(self, _kind: str) -> None:
+        self._on_progress(*self._service.progress())
 
     def _on_progress(self, done: int, total: int) -> None:
         running = self._service is not None and self._service.is_running()
@@ -343,4 +369,4 @@ class LocalUsagePanel(QWidget):
     def _on_finished(self, _results) -> None:
         if self._service is not None and not self._service.is_running():
             self._progress_widget.setVisible(False)
-        self.refresh_status()
+        self._sync_enabled()

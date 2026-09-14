@@ -75,10 +75,10 @@ def test_trend_page_shows_change_against_baseline(qtbot, service):
 
     assert tab.lower_tabs.tabText(1) == "Allowance trend"
     text = tab.trend_summary_label.text()
-    assert "$/pt $2.00 vs median $1.00 of 3 earlier windows" in text
-    assert "+100%" in text
-    assert "All counted windows:" in text
-    assert _column(tab.trend_table, 8) == ["counted"] * 4
+    assert "Cost per 1%: $2.00 in the latest window, +100% vs the typical $1.00" in text
+    assert "3 earlier windows ranged $0.50 to $1.00" in text
+    assert "Output per 1%: 200K, +100% vs the typical 100K." in text
+    assert _column(tab.trend_table, 8) == ["included"] * 4
 
 
 def test_trend_page_collects_before_baseline_and_shows_reasons(qtbot, service):
@@ -87,8 +87,8 @@ def test_trend_page_collects_before_baseline_and_shows_reasons(qtbot, service):
 
     tab = _tab(qtbot, service)
 
-    assert tab.trend_summary_label.text() == "Collecting windows (0 of 3)."
-    assert _column(tab.trend_table, 8) == ["limit reached, extra usage possible", "counted"]
+    assert tab.trend_summary_label.text() == "Needs 3 earlier completed windows to compare; 0 so far."
+    assert _column(tab.trend_table, 8) == ["skipped: limit reached (extra usage possible)", "included"]
 
 
 def test_trend_page_for_metric_without_windows(qtbot, service):
@@ -97,14 +97,14 @@ def test_trend_page_for_metric_without_windows(qtbot, service):
 
     tab.trend_metric_combo.setCurrentIndex(tab.trend_metric_combo.findData("Weekly"))
 
-    assert tab.trend_summary_label.text() == "No comparable completed windows yet."
+    assert tab.trend_summary_label.text() == "No completed windows to compare yet."
     assert tab.trend_table.item(0, 0).text() == "No completed windows yet."
 
 
 def test_trend_summary_text_without_windows():
     report = build_trend([], "Session", load_rate_table(override_path=Path("none.json")))
 
-    assert trend_summary_text(report) == "No comparable completed windows yet."
+    assert trend_summary_text(report) == "No completed windows to compare yet."
 
 
 def test_window_label_formats_session_and_week():

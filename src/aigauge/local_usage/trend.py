@@ -33,12 +33,12 @@ BASELINE_MAX_WINDOWS = 8
 
 COUNTED = "counted"
 REASON_NO_READING = "no quota reading"
-REASON_LOW = f"below {MIN_COUNTABLE_PCT:.0f}%"
-REASON_LIMIT = "limit reached, extra usage possible"
-REASON_INCOMPLETE = "logs incomplete"
-REASON_TIME = "time uncertain"
-REASON_PERIOD = "earlier account, folder or plan"
-REASON_UNPRICED = "unpriced usage"
+REASON_LOW = f"under {MIN_COUNTABLE_PCT:.0f}% used"
+REASON_LIMIT = "limit reached (extra usage possible)"
+REASON_INCOMPLETE = "logs missing for part of the window"
+REASON_TIME = "clock changed during the window"
+REASON_PERIOD = "different account, folder or plan"
+REASON_UNPRICED = "some models have no price"
 
 
 @dataclass

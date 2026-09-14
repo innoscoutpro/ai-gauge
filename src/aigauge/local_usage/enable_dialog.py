@@ -1,4 +1,4 @@
-"""The prompt shown when local usage tracking is turned on."""
+"""The prompt shown when local usage tracking is turned on with OK."""
 
 from __future__ import annotations
 
@@ -30,23 +30,24 @@ def backfill_prompt_text(scans: list[ProviderScan]) -> str:
         oldest = scan.oldest_mtime
         if oldest is None:
             lines.append(f"No {name} logs were found yet.")
-            continue
-        lines.append(
-            f"{name} logs go back to {oldest.astimezone():%b %d} "
-            f"({format_bytes(scan.total_bytes)})."
-        )
+        else:
+            lines.append(
+                f"{name} logs go back to {oldest.astimezone():%b %d} "
+                f"({format_bytes(scan.total_bytes)})."
+            )
     lines.append(
-        "Importing reads these files in the background and may take a little while. "
-        "You can cancel it and it resumes later."
+        "The import runs in the background and can be cancelled. Start from now skips "
+        "past usage; you can still import it later from Settings."
     )
     return " ".join(lines)
 
 
 def ask_backfill(parent: QWidget | None, scans: list[ProviderScan]) -> str:
     box = QMessageBox(parent)
-    box.setWindowTitle("Import local usage history")
+    box.setWindowTitle("Import past usage")
     box.setIcon(QMessageBox.Icon.Question)
-    box.setText(backfill_prompt_text(scans))
+    box.setText("Import past usage from your logs?")
+    box.setInformativeText(backfill_prompt_text(scans))
     import_btn = box.addButton("Import history", QMessageBox.ButtonRole.AcceptRole)
     box.addButton("Start from now", QMessageBox.ButtonRole.RejectRole)
     box.setDefaultButton(import_btn)
