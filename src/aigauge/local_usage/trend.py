@@ -10,6 +10,9 @@ The baseline is the median of at least three earlier comparable completed
 windows of the same metric. Figures across several windows divide total cost
 by total points; per-window ratios are never averaged.
 
+When the user marks a date a provider changed its limits, only windows after
+the latest change are compared, and a window that spans a change is skipped.
+
 This is informational only: it never raises an alert and never feeds the
 quota percentages, the session ratio or the MCP guard.
 """
@@ -17,7 +20,9 @@ quota percentages, the session ratio or the MCP guard.
 from __future__ import annotations
 
 import statistics
+from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 
 from ..ratio import MAX_COUNTABLE_PCT, MIN_COUNTABLE_PCT
 from .rates import CostSummary, RateTable, summarize_costs
@@ -30,15 +35,24 @@ from .summaries import (
 
 BASELINE_MIN_WINDOWS = 3
 BASELINE_MAX_WINDOWS = 8
+# Readings are whole percents, so a session that ended at a few percent has a
+# large rounding error in its per-1% figures. Weekly windows keep the lower floor.
+TREND_MIN_PCT = {"Session": 10.0}
+# A window whose unpriced usage is at most this share of its tokens still gets
+# a cost per 1%, from its priced models, marked as such.
+UNPRICED_TOLERANCE = 0.10
 
 COUNTED = "counted"
 REASON_NO_READING = "no quota reading"
-REASON_LOW = f"under {MIN_COUNTABLE_PCT:.0f}% used"
+REASON_LOW = "too little of the limit used to compare"
 REASON_LIMIT = "limit reached (extra usage possible)"
 REASON_INCOMPLETE = "logs missing for part of the window"
 REASON_TIME = "clock changed during the window"
 REASON_PERIOD = "different account, folder or plan"
+REASON_SPANS_CHANGE = "spans a limit change"
+REASON_BEFORE_CHANGE = "before the latest limit change"
 REASON_UNPRICED = "some models have no price"
+NOTE_PARTIAL_PRICE = "cost excludes unpriced models"
 
 
 @dataclass
@@ -52,6 +66,7 @@ class TrendRow:
     top_model: str | None
     reason: str  # COUNTED or why the window is left out
     dollars_reason: str  # COUNTED, or why only the dollar figure is left out
+    dollars_note: str = ""  # set when the dollar figure leaves out a little unpriced usage
 
     @property
     def counted(self) -> bool:
@@ -81,10 +96,15 @@ class TrendReport:
     output_change: float | None
     pooled_dollars_per_point: float | None
     pooled_output_per_point: float | None
+    limit_change: datetime | None = None  # the change the baseline restarts from
 
     @property
     def collecting(self) -> bool:
         return self.output_baseline.windows < BASELINE_MIN_WINDOWS
+
+
+def min_trend_pct(metric: str) -> float:
+    return TREND_MIN_PCT.get(metric, MIN_COUNTABLE_PCT)
 
 
 def cache_share(cost: CostSummary) -> float | None:
@@ -108,7 +128,7 @@ def _exclusion(summary: WindowSummary, period_id: str | None) -> str:
         return REASON_NO_READING
     if FLAG_LIMIT_REACHED in summary.flags or pct > MAX_COUNTABLE_PCT:
         return REASON_LIMIT
-    if pct < MIN_COUNTABLE_PCT:
+    if pct < min_trend_pct(summary.base_metric):
         return REASON_LOW
     if FLAG_INCOMPLETE in summary.flags:
         return REASON_INCOMPLETE
@@ -119,12 +139,34 @@ def _exclusion(summary: WindowSummary, period_id: str | None) -> str:
     return COUNTED
 
 
-def build_row(summary: WindowSummary, rates: RateTable, period_id: str | None) -> TrendRow:
+def _segment(changes: list[datetime], when: datetime) -> int:
+    return sum(1 for change in changes if change <= when)
+
+
+def build_row(
+    summary: WindowSummary,
+    rates: RateTable,
+    period_id: str | None,
+    changes: list[datetime] = (),
+    current_segment: int = 0,
+) -> TrendRow:
     cost = summarize_costs(summary.usage, rates)
     pct = summary.last_pct
     reason = _exclusion(summary, period_id)
+    if reason == COUNTED and changes:
+        if any(summary.window_start < change < summary.resets_at for change in changes):
+            reason = REASON_SPANS_CHANGE
+        elif _segment(changes, summary.window_start) != current_segment:
+            reason = REASON_BEFORE_CHANGE
     usable_pct = pct if pct is not None and pct > 0 else None
-    dollars_reason = COUNTED if not cost.has_unpriced else REASON_UNPRICED
+    note = ""
+    if not cost.has_unpriced:
+        dollars_reason = COUNTED
+    elif cost.unpriced_share <= UNPRICED_TOLERANCE and cost.priced_cost > 0:
+        dollars_reason = COUNTED
+        note = NOTE_PARTIAL_PRICE
+    else:
+        dollars_reason = REASON_UNPRICED
     return TrendRow(
         summary=summary,
         cost=cost,
@@ -139,6 +181,7 @@ def build_row(summary: WindowSummary, rates: RateTable, period_id: str | None) -
         top_model=top_model(cost),
         reason=reason,
         dollars_reason=dollars_reason,
+        dollars_note=note,
     )
 
 
@@ -159,15 +202,23 @@ def _change(current: float | None, baseline: Baseline) -> float | None:
     return current / baseline.median - 1
 
 
-def build_trend(summaries: list[WindowSummary], metric: str, rates: RateTable) -> TrendReport:
+def build_trend(
+    summaries: list[WindowSummary],
+    metric: str,
+    rates: RateTable,
+    limit_changes: Iterable[datetime] = (),
+) -> TrendReport:
     completed = sorted(
         (s for s in summaries if s.closed and s.metric == metric),
         key=lambda s: s.resets_at,
         reverse=True,
     )
-    # The newest completed window defines the comparison period in force.
+    changes = sorted(limit_changes)
+    # The newest completed window defines the comparison period in force, and
+    # the limit changes before its end define the segment being compared.
     period_id = completed[0].period_id if completed else None
-    rows = [build_row(summary, rates, period_id) for summary in completed]
+    current_segment = _segment(changes, completed[0].resets_at) if completed else len(changes)
+    rows = [build_row(s, rates, period_id, changes, current_segment) for s in completed]
     counted = [row for row in rows if row.counted]
     current = counted[0] if counted else None
     earlier = counted[1 : 1 + BASELINE_MAX_WINDOWS]
@@ -197,4 +248,5 @@ def build_trend(summaries: list[WindowSummary], metric: str, rates: RateTable) -
         pooled_output_per_point=(
             sum(r.cost.tokens.output for r in counted) / points_all if points_all else None
         ),
+        limit_change=changes[current_segment - 1] if current_segment else None,
     )

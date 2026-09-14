@@ -193,6 +193,15 @@ class CostSummary:
     messages: int
     priced_cost: float
     has_unpriced: bool
+    unpriced_tokens: TokenCounts = field(default_factory=TokenCounts)
+
+    @property
+    def unpriced_share(self) -> float:
+        """Unpriced tokens as a share of all tokens (prompt side plus output)."""
+        total = self.tokens.total_input() + self.tokens.output
+        if not total:
+            return 0.0
+        return (self.unpriced_tokens.total_input() + self.unpriced_tokens.output) / total
 
     def share(self, row: ModelCostRow) -> float | None:
         if row.cost is None or self.priced_cost <= 0:
@@ -203,6 +212,7 @@ class CostSummary:
 def summarize_costs(usage: list[ModelUsage], table: RateTable) -> CostSummary:
     """Group usage by model and price each price bucket on read."""
     by_model: dict[str, ModelCostRow] = {}
+    unpriced_tokens = TokenCounts()
     for item in usage:
         row = by_model.get(item.model)
         if row is None:
@@ -214,6 +224,7 @@ def summarize_costs(usage: list[ModelUsage], table: RateTable) -> CostSummary:
         if cost is None:
             if not item.tokens.is_zero():
                 row.has_unpriced = True
+                unpriced_tokens.add(item.tokens)
         else:
             row.cost = (row.cost or 0.0) + cost
     rows = sorted(
@@ -229,6 +240,7 @@ def summarize_costs(usage: list[ModelUsage], table: RateTable) -> CostSummary:
         messages=sum(r.messages for r in rows),
         priced_cost=sum(r.cost or 0.0 for r in rows),
         has_unpriced=any(r.has_unpriced for r in rows),
+        unpriced_tokens=unpriced_tokens,
     )
 
 

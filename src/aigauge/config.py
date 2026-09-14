@@ -189,6 +189,9 @@ class LocalUsageProviderConfig(BaseModel):
     log_root: str | None = None
     # UTC ISO time set by "Start from now"; nothing older is imported.
     start_from: str | None = None
+    # Local dates (YYYY-MM-DD) the provider changed its usage limits. The
+    # allowance trend starts a fresh baseline after the latest one.
+    limit_changes: list[str] = Field(default_factory=list)
 
 
 class LocalUsageConfig(BaseModel):

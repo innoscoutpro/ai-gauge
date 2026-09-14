@@ -14,10 +14,13 @@ from aigauge.local_usage.summaries import (
 from aigauge.local_usage.tokens import TokenCounts
 from aigauge.local_usage.trend import (
     COUNTED,
+    NOTE_PARTIAL_PRICE,
+    REASON_BEFORE_CHANGE,
     REASON_INCOMPLETE,
     REASON_LIMIT,
     REASON_LOW,
     REASON_PERIOD,
+    REASON_SPANS_CHANGE,
     REASON_TIME,
     REASON_UNPRICED,
     build_trend,
@@ -60,16 +63,16 @@ def test_collecting_until_three_earlier_windows(rates):
 
 
 def test_change_is_current_over_median_of_earlier_windows(rates):
-    # sonnet output $10 per million: 1M output at 10% is $1.00 per point
-    windows = [_window(1, 10), _window(2, 20), _window(3, 10), _window(4, 5)]
+    # sonnet output $10 per million: 1M output at 20% is $0.50 per point
+    windows = [_window(1, 20), _window(2, 40), _window(3, 20), _window(4, 10)]
 
     report = build_trend(windows, "Session", rates)
 
     assert report.current.summary is windows[3]
-    assert report.current.dollars_per_point == pytest.approx(2.0)
-    # earlier: $1.00, $0.50, $1.00 -> median $1.00
-    assert report.dollars_baseline.median == pytest.approx(1.0)
-    assert (report.dollars_baseline.low, report.dollars_baseline.high) == (0.5, 1.0)
+    assert report.current.dollars_per_point == pytest.approx(1.0)
+    # earlier: $0.50, $0.25, $0.50 -> median $0.50
+    assert report.dollars_baseline.median == pytest.approx(0.5)
+    assert (report.dollars_baseline.low, report.dollars_baseline.high) == (0.25, 0.5)
     assert report.dollars_change == pytest.approx(1.0)
     assert report.output_change == pytest.approx(1.0)
 
@@ -153,3 +156,37 @@ def test_cache_share_and_top_model_are_reported(rates):
 
     assert row.cache_share == pytest.approx(0.75)
     assert row.top_model == "claude-opus-5"
+
+
+def test_session_windows_need_ten_percent_but_weekly_windows_do_not(rates):
+    report_session = build_trend([_window(1, 8)], "Session", rates)
+    report_weekly = build_trend([_window(1, 8, metric="Weekly")], "Weekly", rates)
+
+    assert report_session.rows[0].reason == REASON_LOW
+    assert report_weekly.rows[0].counted
+
+
+def test_small_unpriced_share_still_gets_a_cost_per_point(rates):
+    window = _window(1, 20)
+    window.usage.append(ModelUsage("codex-auto-review", "", TokenCounts(output=50_000), 3))
+
+    row = build_trend([window], "Session", rates).rows[0]
+
+    assert row.dollars_counted
+    assert row.dollars_note == NOTE_PARTIAL_PRICE
+    assert row.dollars_per_point == pytest.approx(10.0 / 20)
+
+
+def test_limit_change_restarts_the_baseline_and_skips_spanning_windows(rates):
+    windows = [_window(i, 20) for i in range(1, 7)]
+    change = windows[3].window_start + timedelta(hours=1)  # inside window 4
+
+    report = build_trend(windows, "Session", rates, [change])
+
+    reasons = {r.summary.resets_at: r.reason for r in report.rows}
+    assert reasons[windows[5].resets_at] == COUNTED
+    assert reasons[windows[4].resets_at] == COUNTED
+    assert reasons[windows[3].resets_at] == REASON_SPANS_CHANGE
+    assert reasons[windows[2].resets_at] == REASON_BEFORE_CHANGE
+    assert report.limit_change == change
+    assert report.collecting

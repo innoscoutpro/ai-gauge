@@ -68,7 +68,7 @@ def _column(table, col):
 
 
 def test_trend_page_shows_change_against_baseline(qtbot, service):
-    for index, pct in enumerate((10, 20, 10, 5), start=1):
+    for index, pct in enumerate((20, 40, 20, 10), start=1):
         _save(service, index, pct)
 
     tab = _tab(qtbot, service)
@@ -76,9 +76,9 @@ def test_trend_page_shows_change_against_baseline(qtbot, service):
     tab.show_view("trend")
     assert tab.view_buttons["trend"].text() == "Trend"
     text = tab.trend_summary_label.text()
-    assert "Cost per 1%: $2.00 in the latest window, +100% vs the typical $1.00" in text
-    assert "3 earlier windows ranged $0.50 to $1.00" in text
-    assert "Output per 1%: 200K, +100% vs the typical 100K." in text
+    assert "Cost per 1%: $1.00 in the latest window, +100% vs the typical $0.50" in text
+    assert "3 earlier windows ranged $0.25 to $0.50" in text
+    assert "Output per 1%: 100K, +100% vs the typical 50K." in text
     assert _column(tab.trend_table, 8) == ["included"] * 4
 
 
@@ -113,3 +113,17 @@ def test_window_label_formats_session_and_week():
 
     assert " to " in window_label(start, start + timedelta(hours=5))
     assert window_label(start, start + timedelta(days=7)).count(" ") == 4
+
+
+def test_marking_a_limit_change_saves_it_and_restarts_the_baseline(qtbot, service):
+    for index, pct in enumerate((20, 40, 20, 10), start=1):
+        _save(service, index, pct)
+    tab = _tab(qtbot, service)
+    tab.show_view("trend")
+    assert not tab.limit_changes_btn.isHidden()
+
+    tab.set_limit_changes([datetime(2026, 9, 1, 12, tzinfo=UTC).astimezone().date()])
+
+    assert service.config.local_usage.claude.limit_changes
+    assert Config.load().local_usage.claude.limit_changes == service.config.local_usage.claude.limit_changes
+    assert tab.trend_summary_label.text().startswith("Baseline restarted after the limit change on ")

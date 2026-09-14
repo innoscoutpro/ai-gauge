@@ -178,11 +178,13 @@ def test_model_table_leads_with_cost_and_share(qtbot, service):
 
     rows = _model_rows(tab)
     assert [r[0] for r in rows] == ["● claude-opus-5", "● claude-sonnet-5", "Total"]
-    assert [tab.model_table.horizontalHeaderItem(i).text() for i in range(5)] == [
-        "Model", "Est. cost", "Share of cost", "Output", "Msgs",
+    assert [tab.model_table.horizontalHeaderItem(i).text() for i in range(6)] == [
+        "Model", "Est. cost", "Share of cost", "Output", "Share of output", "Msgs",
     ]
-    assert rows[0][4] == "3"
-    assert rows[-1][4] == "4"
+    # opus 936 of 1136 output tokens
+    assert rows[0][4] == "82%"
+    assert rows[0][5] == "3"
+    assert rows[-1][5] == "4"
     share = tab.model_table.cellWidget(0, 2)
     assert isinstance(share, _Bar) and share.label.endswith("%")
 
@@ -191,9 +193,9 @@ def test_token_details_are_hidden_until_asked(qtbot, service):
     service.run_sync()
     tab = _tab(qtbot, service, snapshot=_claude_snapshot())
 
-    assert tab.model_table.isColumnHidden(6)
+    assert tab.model_table.isColumnHidden(7)
     tab.token_details_cb.setChecked(True)
-    assert not tab.model_table.isColumnHidden(6)
+    assert not tab.model_table.isColumnHidden(7)
 
 
 def test_range_selector_defaults_to_this_week_and_covers_all_ranges(qtbot, service):

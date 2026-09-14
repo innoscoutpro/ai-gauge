@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 
 from ..models import UsageSnapshot
 from ..ratio import MIN_COUNTABLE_PCT
+from .limit_changes_dialog import LimitChangesDialog
 from .rates import (
     CostSummary,
     RateTable,
@@ -48,7 +49,13 @@ from .rates import (
 from .settings_panel import SETTINGS_DISCLOSURE, relative_time
 from .store import CLAUDE, ModelUsage, local_date, local_day_bounds
 from .summaries import ORIGIN_BACKFILL, load_summaries
-from .trend import BASELINE_MIN_WINDOWS, COUNTED, TrendReport, build_trend
+from .trend import (
+    BASELINE_MIN_WINDOWS,
+    COUNTED,
+    UNPRICED_TOLERANCE,
+    TrendReport,
+    build_trend,
+)
 from .windows import FABLE, SESSION, WEEKLY, WindowSpec, current_windows
 
 RANGE_WEEK = "week"
@@ -93,6 +100,7 @@ MODEL_COLUMNS = (
     ("cost", "Est. cost", False),
     ("share", "Share of cost", False),
     ("output", "Output", False),
+    ("output_share", "Share of output", False),
     ("messages", "Msgs", False),
     ("input", "Input", True),
     ("cache_read", "Cache read", True),
@@ -159,10 +167,14 @@ def _signed_percent(change: float) -> str:
 def trend_summary_text(report: TrendReport) -> str:
     """The comparison line above the trend table."""
     current = report.current
+    since = (
+        f"Baseline restarted after the limit change on {report.limit_change.astimezone():%b %d}. "
+        if report.limit_change else ""
+    )
     if current is None:
-        return "No completed windows to compare yet."
+        return since + "No completed windows to compare yet."
     if report.collecting:
-        return (
+        return since + (
             f"Needs {BASELINE_MIN_WINDOWS} earlier completed windows to compare; "
             f"{report.output_baseline.windows} so far."
         )
@@ -473,6 +485,14 @@ class UsageCostTab(QWidget):
         self.trend_metric_combo.addItem("Weekly windows", WEEKLY)
         self.trend_metric_combo.currentIndexChanged.connect(lambda _i: self.refresh())
         bar.addWidget(self.trend_metric_combo)
+        bar.addSpacing(6)
+        self.limit_changes_btn = QPushButton("Limits changed…")
+        self.limit_changes_btn.setObjectName("usage_limit_changes_btn")
+        self.limit_changes_btn.setToolTip(
+            "Mark when the provider changed its limits, so the trend starts a fresh baseline"
+        )
+        self.limit_changes_btn.clicked.connect(self._edit_limit_changes)
+        bar.addWidget(self.limit_changes_btn)
         return bar
 
     def _build_model_page(self) -> QWidget:
@@ -592,6 +612,7 @@ class UsageCostTab(QWidget):
         self.range_combo.setHidden(key != VIEW_MODEL)
         self.day_chip.setHidden(key != VIEW_MODEL or self._day_filter is None)
         self.trend_metric_combo.setHidden(key != VIEW_TREND)
+        self.limit_changes_btn.setHidden(key != VIEW_TREND)
 
     def card_text(self, metric: str, key: str) -> str:
         return self.cards[metric].labels[key].text()
@@ -677,7 +698,9 @@ class UsageCostTab(QWidget):
             self._window_usage(spec, spec.start, spec.last_reading_at), self._rates
         )
         if at_reading.has_unpriced:
-            return "Some models have no price"
+            if at_reading.unpriced_share > UNPRICED_TOLERANCE or at_reading.priced_cost <= 0:
+                return "Some models have no price"
+            return f"≈ {format_cost(at_reading.priced_cost / pct)} per 1% (priced models only)"
         return f"≈ {format_cost(at_reading.priced_cost / pct)} per 1%"
 
     def _assign_colors(self, now: datetime, available: bool) -> None:
@@ -767,6 +790,11 @@ class UsageCostTab(QWidget):
                 "model": (f"● {model_row.model}", False, color),
                 "cost": (cost_text, True, TEXT if model_row.cost is not None else DIM),
                 "output": (format_tokens(tokens.output), True, None),
+                "output_share": (
+                    f"{100 * tokens.output / summary.tokens.output:.0f}%"
+                    if summary.tokens.output else "n/a",
+                    True, None,
+                ),
                 "messages": (f"{model_row.messages:,}", True, None),
                 "input": (format_tokens(tokens.input), True, None),
                 "cache_read": (format_tokens(tokens.cache_read), True, None),
@@ -845,10 +873,37 @@ class UsageCostTab(QWidget):
             table.setCellWidget(row, 3, bar)
         _fit(table, {3: 300})
 
+    def limit_change_dates(self) -> list[date]:
+        settings = getattr(self._service.config.local_usage, self._provider)
+        out = []
+        for value in settings.limit_changes:
+            try:
+                out.append(date.fromisoformat(value))
+            except ValueError:
+                continue
+        return sorted(out)
+
+    def set_limit_changes(self, dates: list[date]) -> None:
+        settings = getattr(self._service.config.local_usage, self._provider)
+        settings.limit_changes = [day.isoformat() for day in sorted(set(dates))]
+        try:
+            self._service.config.save()
+        except OSError:
+            pass
+        self.refresh()
+
+    def _edit_limit_changes(self) -> None:
+        dialog = LimitChangesDialog(self.limit_change_dates(), self._display_name, self)
+        if dialog.exec():
+            self.set_limit_changes(dialog.dates())
+
     def trend_report(self) -> TrendReport:
         metric = self.trend_metric_combo.currentData()
         return build_trend(
-            load_summaries(self._service.store, self._account_id, metric), metric, self._rates
+            load_summaries(self._service.store, self._account_id, metric),
+            metric,
+            self._rates,
+            [local_day_bounds(day)[0] for day in self.limit_change_dates()],
         )
 
     def _refresh_trend(self, available: bool) -> None:
@@ -872,6 +927,8 @@ class UsageCostTab(QWidget):
             status = "included" if row.counted else f"skipped: {row.reason}"
             if row.counted and row.dollars_reason != COUNTED:
                 status = f"included; cost not compared, {row.dollars_reason}"
+            elif row.counted and row.dollars_note:
+                status = f"included; {row.dollars_note}"
             cells = (
                 window_label(summary.window_start, summary.resets_at),
                 format_total_cost(row.cost),
