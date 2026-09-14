@@ -775,6 +775,8 @@ class App(QObject):
         self._show_hide_action = menu.addAction("Hide window", self._toggle_widget)
         refresh_act = menu.addAction("Refresh now")
         refresh_act.triggered.connect(lambda: self.refresh_now(manual=True))
+        self._details_menu = menu.addMenu("Usage details")
+        self._details_menu.aboutToShow.connect(self._populate_details_menu)
         menu.addAction("Settings…", self.open_settings)
         menu.addSeparator()
         quit_act = QAction("Quit", menu)
@@ -1013,6 +1015,19 @@ class App(QObject):
 
     def open_ratio_history(self, provider: str) -> None:
         display_name = display_name_for_account(self._config, provider)
+        usage_tab = None
+        service = self._local_usage
+        if service is not None and service.provider_for_account(provider) is not None:
+            from .local_usage.usage_tab import UsageCostTab
+
+            try:
+                usage_tab = UsageCostTab(
+                    service, provider, display_name, self._snapshots.get(provider)
+                )
+                service.maybe_import()
+            except Exception:  # noqa: BLE001
+                log.exception("usage and cost tab failed to build")
+                usage_tab = None
         dlg = RatioHistoryDialog(
             provider,
             display_name,
@@ -1020,8 +1035,32 @@ class App(QObject):
             self._ratio.current_estimate(provider),
             weekly_pct_used=self._current_weekly_pct(provider),
             parent=self._widget,
+            usage_tab=usage_tab,
         )
         dlg.exec()
+        if usage_tab is not None:
+            usage_tab.detach()
+
+    def _populate_details_menu(self) -> None:
+        menu = self._details_menu
+        menu.clear()
+        accounts = [
+            account
+            for account in self._config.browser_accounts
+            if account.enabled and account.kind in ("claude", "codex")
+        ]
+        if not accounts:
+            empty = menu.addAction("No Claude or Codex accounts")
+            empty.setEnabled(False)
+            return
+        for account in accounts:
+            menu.addAction(
+                display_name_for_account(self._config, account.id),
+                # triggered passes `checked` first; keep it off account_id.
+                lambda _checked=False, account_id=account.id: self.open_ratio_history(
+                    account_id
+                ),
+            )
 
     # ----- Local usage -----
 

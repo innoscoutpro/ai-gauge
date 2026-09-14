@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QGridLayout,
     QLabel,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -35,6 +36,25 @@ QPushButton {
 }
 QPushButton:hover { background:#4b5563; }
 QPushButton:default { background:#2563eb; border-color:#1d4ed8; }
+QTabWidget::pane { border:1px solid #374151; border-radius:4px; top:-1px; }
+QTabBar::tab {
+    background:#111827; color:#9ca3af; border:1px solid #374151;
+    padding:5px 12px; border-top-left-radius:4px; border-top-right-radius:4px;
+}
+QTabBar::tab:selected { background:#1f2937; color:#f3f4f6; }
+QTableWidget { background:#111827; color:#e5e7eb; border:none; font-size:11px; }
+QTableWidget::item:selected { background:#374151; color:#f9fafb; }
+QHeaderView::section {
+    background:#1f2937; color:#9ca3af; border:none; padding:3px 6px;
+    font-size:10px; font-weight:700;
+}
+QComboBox, QToolButton {
+    background:#374151; color:#f3f4f6; border:1px solid #4b5563;
+    border-radius:4px; padding:2px 8px;
+}
+QComboBox QAbstractItemView { background:#1f2937; color:#e5e7eb; }
+QCheckBox { color:#e5e7eb; }
+QScrollArea, QScrollArea > QWidget > QWidget { background:transparent; }
 """
 
 _HEADER_COLS = ("Period", "Sessions/wk", "1 session ≈", "Coverage", "Readings")
@@ -147,6 +167,7 @@ class RatioHistoryDialog(QDialog):
         current_estimate: RatioEstimate | None,
         weekly_pct_used: float | None = None,
         parent=None,
+        usage_tab: QWidget | None = None,
     ):
         super().__init__(None)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
@@ -154,8 +175,12 @@ class RatioHistoryDialog(QDialog):
         self.setStyleSheet(_DARK_STYLESHEET)
         self.resize(460, 440)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 16, 16, 12)
+        outer.setSpacing(10)
+        ratio_page = QWidget()
+        layout = QVBoxLayout(ratio_page)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
         self._typical = typical_sessions_per_week(records)
@@ -178,10 +203,25 @@ class RatioHistoryDialog(QDialog):
 
         layout.addWidget(self._history_grid(records), 1)
 
+        # With local usage tracking on for this account the dialog gains a
+        # second tab; with it off the dialog is exactly the ratio view.
+        self.tabs: QTabWidget | None = None
+        self.usage_tab = usage_tab
+        if usage_tab is None:
+            outer.addWidget(ratio_page, 1)
+        else:
+            self.setWindowTitle(f"{display_name}: usage details")
+            self.resize(760, 640)
+            self.setMinimumSize(360, 320)
+            self.tabs = QTabWidget()
+            self.tabs.addTab(ratio_page, "Session vs weekly")
+            self.tabs.addTab(usage_tab, "Usage and cost")
+            outer.addWidget(self.tabs, 1)
+
         close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close_box.rejected.connect(self.reject)
         close_box.accepted.connect(self.accept)
-        layout.addWidget(close_box)
+        outer.addWidget(close_box)
 
     def _summary_block(
         self, est: RatioEstimate | None, weekly_pct_used: float | None

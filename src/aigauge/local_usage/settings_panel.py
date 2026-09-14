@@ -224,6 +224,15 @@ class LocalUsagePanel(QWidget):
         self.rates_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.rates_label)
         layout.addStretch(1)
+        try:
+            from .rates import load_rate_table
+
+            table = load_rate_table()
+            self.set_rates_text(
+                f"{table.describe()}. Optional price override file: {table.override_path}"
+            )
+        except Exception:  # noqa: BLE001
+            self.set_rates_text("Rate table unavailable.")
 
         self.enabled_cb.toggled.connect(self._sync_enabled)
         if service is not None:

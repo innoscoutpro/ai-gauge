@@ -1,0 +1,114 @@
+{
+  "version": "2026-09-14",
+  "currency": "USD",
+  "unit": "per million tokens",
+  "notes": "Standard-tier API prices. A model's `variants` hold the full price set for fast mode and for prompts above the long-context threshold. A long-context bucket on a model with no `long` variant is priced at base rates (no surcharge). Any other missing variant is unpriced. OpenAI models before GPT-5.6 have no cache-write charge, so cache writes are priced as input.",
+  "models": {
+    "claude-opus-5": {
+      "provider": "anthropic",
+      "rates": {"input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write_5m": 6.25, "cache_write_1h": 10.0},
+      "variants": {
+        "fast": {"input": 10.0, "output": 50.0, "cache_read": 1.0, "cache_write_5m": 12.5, "cache_write_1h": 20.0}
+      },
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-09-14"
+    },
+    "claude-sonnet-5": {
+      "provider": "anthropic",
+      "rates": {"input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write_5m": 2.5, "cache_write_1h": 4.0},
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-09-14"
+    },
+    "claude-fable-5": {
+      "provider": "anthropic",
+      "rates": {"input": 10.0, "output": 50.0, "cache_read": 1.0, "cache_write_5m": 12.5, "cache_write_1h": 20.0},
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-09-14"
+    },
+    "claude-fable-5-1": {
+      "provider": "anthropic",
+      "rates": {"input": 10.0, "output": 50.0, "cache_read": 0.25, "cache_write_5m": 12.5, "cache_write_1h": 20.0},
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-09-14"
+    },
+    "claude-haiku-4-5": {
+      "provider": "anthropic",
+      "rates": {"input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write_5m": 1.25, "cache_write_1h": 2.0},
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-09-14"
+    },
+    "gpt-5.4": {
+      "provider": "openai",
+      "rates": {"input": 2.5, "output": 15.0, "cache_read": 0.25, "cache_write_5m": 2.5, "cache_write_1h": 2.5},
+      "variants": {
+        "long": {"input": 5.0, "output": 22.5, "cache_read": 0.5, "cache_write_5m": 5.0, "cache_write_1h": 5.0},
+        "fast": {"input": 5.0, "output": 30.0, "cache_read": 0.5, "cache_write_5m": 5.0, "cache_write_1h": 5.0}
+      },
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "as_of": "2026-09-14"
+    },
+    "gpt-5.4-mini": {
+      "provider": "openai",
+      "rates": {"input": 0.75, "output": 4.5, "cache_read": 0.075, "cache_write_5m": 0.75, "cache_write_1h": 0.75},
+      "variants": {
+        "fast": {"input": 1.5, "output": 9.0, "cache_read": 0.15, "cache_write_5m": 1.5, "cache_write_1h": 1.5}
+      },
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "as_of": "2026-09-14"
+    },
+    "gpt-5.5": {
+      "provider": "openai",
+      "rates": {"input": 5.0, "output": 30.0, "cache_read": 0.5, "cache_write_5m": 5.0, "cache_write_1h": 5.0},
+      "variants": {
+        "long": {"input": 10.0, "output": 45.0, "cache_read": 1.0, "cache_write_5m": 10.0, "cache_write_1h": 10.0},
+        "fast": {"input": 12.5, "output": 75.0, "cache_read": 1.25, "cache_write_5m": 12.5, "cache_write_1h": 12.5}
+      },
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "as_of": "2026-09-14"
+    },
+    "gpt-5.6-sol": {
+      "provider": "openai",
+      "rates": {"input": 4.0, "output": 20.0, "cache_read": 0.4, "cache_write_5m": 5.0, "cache_write_1h": 5.0},
+      "variants": {
+        "long": {"input": 8.0, "output": 30.0, "cache_read": 0.8, "cache_write_5m": 10.0, "cache_write_1h": 10.0},
+        "fast": {"input": 8.0, "output": 40.0, "cache_read": 0.8, "cache_write_5m": 10.0, "cache_write_1h": 10.0},
+        "fast+long": {"input": 16.0, "output": 60.0, "cache_read": 1.6, "cache_write_5m": 20.0, "cache_write_1h": 20.0}
+      },
+      "source": "https://developers.openai.com/api/docs/pricing (promotional price, published as available through 2026-11-21)",
+      "as_of": "2026-09-14"
+    },
+    "gpt-5.6-luna": {
+      "provider": "openai",
+      "rates": {"input": 0.2, "output": 1.2, "cache_read": 0.02, "cache_write_5m": 0.25, "cache_write_1h": 0.25},
+      "variants": {
+        "long": {"input": 0.4, "output": 1.8, "cache_read": 0.04, "cache_write_5m": 0.5, "cache_write_1h": 0.5},
+        "fast": {"input": 0.4, "output": 2.4, "cache_read": 0.04, "cache_write_5m": 0.5, "cache_write_1h": 0.5},
+        "fast+long": {"input": 0.8, "output": 3.6, "cache_read": 0.08, "cache_write_5m": 1.0, "cache_write_1h": 1.0}
+      },
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "as_of": "2026-09-14"
+    },
+    "gpt-5.6-terra": {
+      "provider": "openai",
+      "rates": {"input": 2.0, "output": 12.0, "cache_read": 0.2, "cache_write_5m": 2.5, "cache_write_1h": 2.5},
+      "variants": {
+        "long": {"input": 4.0, "output": 18.0, "cache_read": 0.4, "cache_write_5m": 5.0, "cache_write_1h": 5.0},
+        "fast": {"input": 4.0, "output": 24.0, "cache_read": 0.4, "cache_write_5m": 5.0, "cache_write_1h": 5.0},
+        "fast+long": {"input": 8.0, "output": 36.0, "cache_read": 0.8, "cache_write_5m": 10.0, "cache_write_1h": 10.0}
+      },
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "as_of": "2026-09-14"
+    },
+    "gpt-6-astra": {
+      "provider": "openai",
+      "rates": {"input": 10.0, "output": 50.0, "cache_read": 1.0, "cache_write_5m": 12.5, "cache_write_1h": 12.5},
+      "variants": {
+        "long": {"input": 20.0, "output": 75.0, "cache_read": 2.0, "cache_write_5m": 25.0, "cache_write_1h": 25.0},
+        "fast": {"input": 20.0, "output": 100.0, "cache_read": 2.0, "cache_write_5m": 25.0, "cache_write_1h": 25.0},
+        "fast+long": {"input": 40.0, "output": 150.0, "cache_read": 4.0, "cache_write_5m": 50.0, "cache_write_1h": 50.0}
+      },
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "as_of": "2026-09-14"
+    }
+  }
+}
