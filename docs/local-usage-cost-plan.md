@@ -147,8 +147,8 @@ A window's usage is the total of activity from **window start** to the **last qu
 
 - A bundled, versioned `local_usage/rates.json` has one entry per model: input, output, cache read, 5m cache write, 1h cache write, speed or tier multipliers, long-context thresholds where they apply, and currency. Values come from the providers' official API pricing pages when the file is written or updated, and each entry records its source and date.
 - An optional `app_data_dir()/rates.override.json` lets users add or correct models without waiting for a release.
-- A model with no entry is **unpriced**: its tokens still show, its cost shows "no price", and there is never a substitute model's price or a zero.
-- Totals that include unpriced usage say so ("$42.10 + unpriced usage").
+- A model with no entry is **unpriced**: its tokens still show, its cost shows "price unavailable", and there is never a substitute model's price or a zero.
+- Totals stay readable and show the priced portion. A nearby note names the excluded usage and its share of tokens.
 
 ### Trend
 
@@ -196,8 +196,8 @@ Models   [Current session ▾]  (Current session · Current week · Today · Las
 Model             Msgs   Input  Output  Cache rd  Cache wr   Est. cost   Share
 claude-opus-5      412    9.1K   151K     18.2M     1.1M      $10.90    88% ████████▊
 claude-sonnet-5    130    2.2K    31K      3.9M     0.3M       $1.50    12% █▏
-claude-fable-5-1     6    0.1K     2K      0.1M       0K    no price     n/a
-Total              548   11.4K   184K     22.2M     1.4M  $12.40 + unpriced
+claude-fable-5-1     6    0.1K     2K      0.1M       0K  price unavailable  n/a
+Total              548   11.4K   184K     22.2M     1.4M      $12.40
 
 [Daily]  [Allowance trend]
 ```
@@ -265,7 +265,7 @@ Run with `.venv\Scripts\python.exe` and `QT_QPA_PLATFORM=offscreen`, as CI does.
 - **Codex parser:** repeated totals don't double count; a dropping total starts a new baseline; missing `info` or `rate_limits` doesn't fail; events without a model become `unknown`.
 - **Import:** appends are read incrementally; a truncated or rewritten file is fully re-read without double counting; a half-written line is picked up on the next pass; two roots pointing at the same file count it once; a cancelled backfill resumes and ends with the same totals as an uninterrupted one.
 - **Formats:** unrecognized lines produce the "not recognized" state, not zero.
-- **Pricing:** unpriced models show tokens with "no price" and never add $0; changing the rate table changes costs but not trend exclusions; the override file takes precedence.
+- **Pricing:** unpriced models show tokens with "price unavailable" and never add $0; totals show the priced portion with a note naming exclusions; changing the rate table changes costs but not trend exclusions; the override file takes precedence.
 - **Windows:** the Claude start is taken from `resets_at`; the Codex window comes from its readings; incomplete, time-uncertain and out-of-range windows are left out with their reason; the baseline needs 3 windows; totals are divided rather than ratios averaged.
 - **Accounts:** renaming or reordering accounts keeps the assignment; removing the account pauses tracking; reassigning starts a new comparison period; other accounts never show the same totals.
 - **UI:** empty, importing, partial, not recognized, unpriced, and long-history states; the model table range selector; the dialog at small sizes.

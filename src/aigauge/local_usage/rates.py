@@ -246,7 +246,7 @@ def summarize_costs(usage: list[ModelUsage], table: RateTable) -> CostSummary:
 
 def format_cost(value: float | None) -> str:
     if value is None:
-        return "no price"
+        return "price unavailable"
     if value >= 100:
         return f"${value:,.0f}"
     return f"${value:,.2f}"
@@ -256,6 +256,5 @@ def format_total_cost(summary: CostSummary) -> str:
     if not summary.rows:
         return "$0.00"
     if summary.has_unpriced and summary.priced_cost == 0:
-        return "no price"
-    text = format_cost(summary.priced_cost)
-    return f"{text} + unpriced" if summary.has_unpriced else text
+        return "price unavailable"
+    return format_cost(summary.priced_cost)

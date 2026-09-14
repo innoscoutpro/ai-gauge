@@ -103,6 +103,14 @@ MODEL_COLORS = (
     "#60a5fa", "#34d399", "#f472b6", "#f59e0b",
     "#a78bfa", "#f87171", "#22d3ee", "#a3e635",
 )
+MODEL_DISPLAY_NAMES = {
+    "codex-auto-review": "Automatic review",
+    "unknown": "Unidentified",
+}
+UNPRICED_DISPLAY_NAMES = {
+    "codex-auto-review": "automatic review",
+    "unknown": "unidentified usage",
+}
 
 # key, header, shown only with "Token details"
 MODEL_COLUMNS = (
@@ -148,6 +156,24 @@ TREND_DEFINITION = (
     "Cost per 1% is what a window's usage would cost at API prices, divided by how "
     "much of the limit it used. Higher means the limit covered more."
 )
+
+
+def display_model_name(model: str) -> str:
+    return MODEL_DISPLAY_NAMES.get(model, model)
+
+
+def unpriced_note(summary: CostSummary) -> str:
+    rows = [row for row in summary.rows if row.has_unpriced]
+    names = [UNPRICED_DISPLAY_NAMES.get(row.model, row.model) for row in rows]
+    if not names:
+        return ""
+    if len(names) == 1:
+        subject = names[0]
+    elif len(names) == 2:
+        subject = f"{names[0]} and {names[1]}"
+    else:
+        subject = f"{len(names)} models without prices"
+    return f"Excludes {subject} ({summary.unpriced_share * 100:.0f}% of tokens)"
 
 _SEGMENT_STYLE = (
     "QPushButton { background:#111827; color:#9ca3af; border:1px solid #374151; "
@@ -427,6 +453,9 @@ class _WindowCard(QFrame):
             "quota": _label("", TEXT, 12),
             "per_point": _label("", MUTED, 11),
         }
+        self.labels["per_point"].setMinimumHeight(
+            self.labels["per_point"].fontMetrics().height()
+        )
         for key, label in self.labels.items():
             label.setObjectName(f"usage_{metric.lower()}_{key}")
             layout.addWidget(label)
@@ -443,7 +472,8 @@ class _WindowCard(QFrame):
         self.labels["quota"].setToolTip(LIMIT_TIP if limit else "")
         self.labels["per_point"].setText(per_point)
         self.labels["per_point"].setToolTip(LIMIT_TIP if limit else "")
-        self.labels["per_point"].setHidden(not per_point)
+        # Reserve the optional note's line so neighboring cards stay aligned.
+        self.labels["per_point"].setHidden(False)
 
 
 class _CardRow(QWidget):
@@ -934,8 +964,11 @@ class UsageCostTab(QWidget):
         )
         if at_reading.has_unpriced:
             if at_reading.unpriced_share > UNPRICED_TOLERANCE or at_reading.priced_cost <= 0:
-                return "Some models have no price"
-            return f"≈ {format_cost(at_reading.priced_cost / pct)} per 1% (priced models only)"
+                return unpriced_note(at_reading)
+            return (
+                f"≈ {format_cost(at_reading.priced_cost / pct)} per 1% · "
+                f"excludes {at_reading.unpriced_share * 100:.0f}%"
+            )
         return f"≈ {format_cost(at_reading.priced_cost / pct)} per 1%"
 
     def _assign_colors(self, now: datetime, available: bool) -> None:
@@ -1018,11 +1051,11 @@ class UsageCostTab(QWidget):
             color = self._color(model_row.model)
             side = sidechain.get(model_row.model)
             cost_text = (
-                format_cost(model_row.cost) + (" + unpriced" if model_row.has_unpriced else "")
-                if model_row.cost is not None else "no price"
+                format_cost(model_row.cost)
+                if model_row.cost is not None else "price unavailable"
             )
             values = {
-                "model": (f"● {model_row.model}", False, color),
+                "model": (f"● {display_model_name(model_row.model)}", False, color),
                 "cost": (cost_text, True, TEXT if model_row.cost is not None else DIM),
                 "output": (format_tokens(tokens.output), True, None),
                 "output_share": (
@@ -1060,7 +1093,10 @@ class UsageCostTab(QWidget):
             "reasoning": (format_tokens(tokens.reasoning), True),
         }
         for col_key, (text, right) in totals.items():
-            table.setItem(total, _COLUMN_INDEX[col_key], _item(text, right=right, bold=True))
+            item = _item(text, right=right, bold=True)
+            if col_key == "cost" and summary.has_unpriced:
+                item.setToolTip(unpriced_note(summary))
+            table.setItem(total, _COLUMN_INDEX[col_key], item)
         self._on_token_details(self.token_details_cb.isChecked(), refit=False)
         _fit(table, {share_column: 170})
 
@@ -1089,7 +1125,8 @@ class UsageCostTab(QWidget):
         )
         self.day_legend.setText(
             "&nbsp;&nbsp;&nbsp;".join(
-                f'<span style="color:{self._color(m)}">●</span> {m}' for m in models
+                f'<span style="color:{self._color(m)}">●</span> {display_model_name(m)}'
+                for m in models
             )
         )
         peak = max((s.priced_cost for s in summaries.values()), default=0.0) or 1.0
@@ -1099,12 +1136,20 @@ class UsageCostTab(QWidget):
             summary = summaries[day]
             self._daily_days.append(day)
             table.setItem(row, 0, _item(day.strftime("%a %b %d"), right=False))
-            table.setItem(row, 1, _item(format_total_cost(summary)))
+            cost_item = _item(format_total_cost(summary))
+            if summary.has_unpriced:
+                cost_item.setToolTip(unpriced_note(summary))
+            table.setItem(row, 1, cost_item)
             table.setItem(row, 2, _item(f"{summary.messages:,}"))
             bar = _Bar(
                 [((r.cost or 0.0) / peak, self._color(r.model)) for r in summary.rows if r.cost]
             )
-            bar.setToolTip("\n".join(f"{r.model}: {format_cost(r.cost)}" for r in summary.rows))
+            bar.setToolTip(
+                "\n".join(
+                    f"{display_model_name(r.model)}: {format_cost(r.cost)}"
+                    for r in summary.rows
+                )
+            )
             table.setCellWidget(row, 3, bar)
         _fit(table, {3: 300})
 
@@ -1238,7 +1283,7 @@ class UsageCostTab(QWidget):
                     versus,
                     format_total_cost(row.cost),
                     f"{100 * row.cache_share:.0f}%" if row.cache_share is not None else "n/a",
-                    row.top_model or "n/a",
+                    display_model_name(row.top_model) if row.top_model else "n/a",
                     "from history" if summary.origin == ORIGIN_BACKFILL else "tracked",
                 )
                 for column, text in enumerate(cells):
@@ -1248,6 +1293,8 @@ class UsageCostTab(QWidget):
                             item.setToolTip(f"* {row.dollars_note}")
                         elif row.dollars_reason != COUNTED:
                             item.setToolTip(row.dollars_reason)
+                    elif column == 5 and row.cost.has_unpriced:
+                        item.setToolTip(unpriced_note(row.cost))
                     table.setItem(index, column, item)
         _fit(table)
         self.trend_show_all_btn.setHidden(len(counted) <= TREND_RECENT_ROWS)

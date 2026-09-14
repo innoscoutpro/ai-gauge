@@ -3,6 +3,7 @@ import json
 import pytest
 
 from aigauge.local_usage.rates import (
+    format_cost,
     format_total_cost,
     load_rate_table,
     summarize_costs,
@@ -66,7 +67,17 @@ def test_unknown_model_is_unpriced_never_zero(table):
     assert unpriced.tokens.output == 500
     assert summary.rows[-1] is unpriced  # unpriced rows sort last
     assert summary.priced_cost == pytest.approx(25.0)
-    assert format_total_cost(summary) == "$25.00 + unpriced"
+    assert format_total_cost(summary) == "$25.00"
+
+
+def test_all_unpriced_usage_says_price_unavailable(table):
+    summary = summarize_costs(
+        [ModelUsage("codex-auto-review", "", TokenCounts(output=500), 2)],
+        table,
+    )
+
+    assert format_cost(None) == "price unavailable"
+    assert format_total_cost(summary) == "price unavailable"
 
 
 def test_dated_model_names_fall_back_to_base_entry(table):

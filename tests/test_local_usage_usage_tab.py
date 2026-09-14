@@ -10,8 +10,9 @@ from aigauge import app as app_module
 from aigauge.config import Config
 from aigauge.local_usage.claude_logs import ClaudeMessage
 from aigauge.local_usage.codex_logs import CodexQuotaReading
-from aigauge.local_usage.rates import load_rate_table
+from aigauge.local_usage.rates import load_rate_table, summarize_costs
 from aigauge.local_usage.service import LocalUsageService
+from aigauge.local_usage.store import ModelUsage
 from aigauge.local_usage.summaries import WindowSummary, save_summary
 from aigauge.local_usage.tokens import TokenCounts
 from aigauge.local_usage.usage_tab import (
@@ -19,7 +20,9 @@ from aigauge.local_usage.usage_tab import (
     UNAVAILABLE,
     UsageCostTab,
     _Bar,
+    display_model_name,
     format_tokens,
+    unpriced_note,
 )
 from aigauge.local_usage.windows import (
     claude_windows_from_snapshot,
@@ -150,6 +153,18 @@ def test_cards_show_cost_allowance_and_cost_per_percent(qtbot, service):
     assert tab.cards["Fable"].isHidden()
 
 
+def test_cards_reserve_height_for_an_optional_note(qtbot, service):
+    tab = _tab(qtbot, service, snapshot=_claude_snapshot())
+    session = tab.cards["Session"]
+    weekly = tab.cards["Weekly"]
+
+    session.set_values("This session", UNAVAILABLE, UNAVAILABLE, "")
+    weekly.set_values("This week", "$12.71", "15% of allowance used", "A note")
+
+    assert not session.labels["per_point"].isHidden()
+    assert session.sizeHint().height() == weekly.sizeHint().height()
+
+
 def test_limit_reached_card_drops_cost_per_percent(qtbot, service):
     service.run_sync()
     tab = _tab(qtbot, service, snapshot=_claude_snapshot(weekly_pct=100.0))
@@ -229,15 +244,29 @@ def test_view_and_range_choices_are_remembered(qtbot, service):
     assert saved.details_range == "30d"
 
 
-def test_unpriced_models_show_no_price_and_sort_last(qtbot, service):
+def test_unpriced_models_use_clear_names_and_keep_total_readable(qtbot, service):
     service.run_sync()
     tab = _tab(qtbot, service, account_id="codex")
     _select_range(tab, "30d")
 
     rows = _model_rows(tab)
-    assert [r[0] for r in rows][-2:] == ["● unknown", "Total"]
-    assert rows[-2][1] == "no price"
-    assert rows[-1][1].endswith("+ unpriced")
+    assert [r[0] for r in rows][-2:] == ["● Unidentified", "Total"]
+    assert rows[-2][1] == "price unavailable"
+    assert "+ unpriced" not in rows[-1][1]
+    assert rows[-1][1].startswith("$")
+    total_cost = tab.model_table.item(tab.model_table.rowCount() - 1, 1)
+    assert total_cost.toolTip().startswith("Excludes unidentified usage (")
+
+
+def test_internal_codex_review_model_has_a_friendly_exclusion_note():
+    rates = load_rate_table(override_path=Path("does-not-exist.json"))
+    summary = summarize_costs(
+        [ModelUsage("codex-auto-review", "", TokenCounts(output=500), 2)],
+        rates,
+    )
+
+    assert display_model_name("codex-auto-review") == "Automatic review"
+    assert unpriced_note(summary) == "Excludes automatic review (100% of tokens)"
 
 
 def test_clicking_a_day_shows_its_models_with_a_removable_chip(qtbot, service):

@@ -16,6 +16,8 @@
 
 - Made **Usage and cost** the default page of usage details when local tracking is enabled. **Session vs weekly** remains available as the secondary tab, and remains the only view when local tracking is off.
 - Kept wide model-table columns compact and remembered the last selected view and range.
+- Made unavailable model pricing less intrusive: totals stay readable, internal Codex review usage is labeled **Automatic review**, and concise notes say what the displayed cost excludes.
+- Kept usage cards aligned when one has no secondary note to show.
 
 ### Fixed
 
