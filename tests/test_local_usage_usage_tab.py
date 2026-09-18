@@ -197,7 +197,8 @@ def test_model_table_leads_with_cost_and_share(qtbot, service):
     tab = _tab(qtbot, service, snapshot=_claude_snapshot())
 
     rows = _model_rows(tab)
-    assert [r[0] for r in rows] == ["● claude-opus-5", "● claude-sonnet-5", "Total"]
+    assert [r[0] for r in rows] == ["● Opus 5", "● Sonnet 5", "Total"]
+    assert tab.model_table.item(0, 0).toolTip() == "claude-opus-5"
     assert [tab.model_table.horizontalHeaderItem(i).text() for i in range(6)] == [
         "Model", "Est. cost", "Share of cost", "Output", "Share of output", "Msgs",
     ]
@@ -229,7 +230,7 @@ def test_range_selector_defaults_to_this_week_and_covers_all_ranges(qtbot, servi
     ]
     for key, _label in RANGES:
         _select_range(tab, key)
-        assert _model_rows(tab)[0][0] == "● claude-opus-5"
+        assert _model_rows(tab)[0][0] == "● Opus 5"
 
 
 def test_view_and_range_choices_are_remembered(qtbot, service):
@@ -272,18 +273,35 @@ def test_internal_codex_review_model_has_a_friendly_exclusion_note():
     assert unpriced_note(summary) == "Excludes automatic review (100% of tokens)"
 
 
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    (
+        ("claude-opus-5", "Opus 5"),
+        ("claude-fable-5-1", "Fable 5.1"),
+        ("claude-haiku-4-5-20251001", "Haiku 4.5"),
+        ("claude-3-5-sonnet-20241022", "Sonnet 3.5"),
+        ("claude-opus-5-latest", "Opus 5"),
+        ("claude-future-6", "claude-future-6"),
+        ("other-model-20251001", "other-model-20251001"),
+    ),
+)
+def test_claude_model_display_names_are_conservative(model, expected):
+    assert display_model_name(model) == expected
+
+
 def test_clicking_a_day_shows_its_models_with_a_removable_chip(qtbot, service):
     service.run_sync()
     tab = _tab(qtbot, service, snapshot=_claude_snapshot())
     tab.show_view("day")
     assert tab.daily_table.rowCount() == 1
-    assert "claude-opus-5" in tab.day_legend.text()
+    assert "Opus 5" in tab.day_legend.text()
+    assert "Opus 5 — claude-opus-5" in tab.day_legend.toolTip()
 
     tab._on_day_clicked(0, 0)
 
     assert tab.current_view() == "model"
     assert not tab.day_chip.isHidden()
-    assert _model_rows(tab)[0][0] == "● claude-opus-5"
+    assert _model_rows(tab)[0][0] == "● Opus 5"
     tab.day_chip.click()
     assert tab.day_chip.isHidden()
 

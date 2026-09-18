@@ -8,10 +8,20 @@ from aigauge.config import Config
 from aigauge.local_usage.rates import load_rate_table
 from aigauge.local_usage.service import LocalUsageService
 from aigauge.local_usage.store import ModelUsage
-from aigauge.local_usage.summaries import FLAG_LIMIT_REACHED, WindowSummary, save_summary
+from aigauge.local_usage.summaries import (
+    FLAG_LIMIT_REACHED,
+    WindowSummary,
+    load_summaries,
+    save_summary,
+)
 from aigauge.local_usage.tokens import TokenCounts
 from aigauge.local_usage.trend import build_trend
-from aigauge.local_usage.usage_tab import UsageCostTab, trend_summary_text, window_label
+from aigauge.local_usage.usage_tab import (
+    UsageCostTab,
+    rolling_average_points,
+    trend_summary_text,
+    window_label,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "local_usage"
 UTC = timezone.utc
@@ -33,7 +43,15 @@ def service(tmp_path):
     svc.shutdown()
 
 
-def _save(service, index, pct, flags=(), model="claude-sonnet-5", metric="Session"):
+def _save(
+    service,
+    index,
+    pct,
+    flags=(),
+    model="claude-sonnet-5",
+    metric="Session",
+    output=1_000_000,
+):
     resets = datetime(2026, 9, 1, tzinfo=UTC) + timedelta(hours=5 * index)
     save_summary(
         service.store,
@@ -44,7 +62,7 @@ def _save(service, index, pct, flags=(), model="claude-sonnet-5", metric="Sessio
             resets_at=resets,
             last_reading_at=resets - timedelta(minutes=5),
             last_pct=pct,
-            usage=[ModelUsage(model, "", TokenCounts(output=1_000_000), 10)],
+            usage=[ModelUsage(model, "", TokenCounts(output=output), 10)],
             origin="live",
             flags=set(flags),
             period_id="p1",
@@ -76,21 +94,28 @@ def _column(table, col):
     return [table.item(r, col).text() for r in range(table.rowCount())]
 
 
-def test_headline_uses_the_last_five_sessions_in_plain_words(qtbot, service):
+def test_default_summary_is_a_compact_recent_ballpark(qtbot, service):
     _baseline_then_recent(service, recent_pct=10)
 
     tab = _tab(qtbot, service)
 
     assert tab.trend_headline_label.text() == (
-        "Last 5 sessions: 1% of the limit covered about $1.00 of usage"
+        "Recent ballpark · 5 sessions    ~$1.0 API-equiv. / 1%"
+        "    ·    ~100K output / 1%"
     )
+    assert not tab.trend_headline_label.isHidden()
+    assert tab.trend_answer.isHidden()
+    assert [metric.title for metric in tab.trend_comparison.metrics] == [
+        "API-equiv. / 1%", "Output / 1%",
+    ]
+    assert tab.trend_comparison.metrics[0].change == pytest.approx(1.0)
     detail = tab.trend_detail_label.text()
-    assert "100% more than usual (typical $0.50, from 3 earlier sessions)" in detail
+    assert "100% more than usual (earlier average $0.50, from 3 sessions)" in detail
     assert "Output per 1%: 100K, 100% more than usual" in detail
     assert tab.trend_warning_label.isHidden()
 
 
-def test_one_unusual_session_does_not_swing_the_answer(qtbot, service):
+def test_large_session_has_proportional_weight_in_the_answer(qtbot, service):
     for index in range(1, 4):
         _save(service, index, 20)
     for index, pct in enumerate((20, 20, 20, 20, 80), start=4):
@@ -98,20 +123,24 @@ def test_one_unusual_session_does_not_swing_the_answer(qtbot, service):
 
     tab = _tab(qtbot, service)
 
-    assert tab.trend_detail_label.text().startswith("About the same as usual (typical $0.50")
+    assert "~$0.31 API-equiv. / 1%" in tab.trend_headline_label.text()
+    assert tab.trend_detail_label.text().startswith(
+        "38% less than usual (earlier average $0.50"
+    )
 
 
-def test_compared_table_is_short_with_vs_typical(qtbot, service):
+def test_default_table_keeps_comparison_column_out_of_the_way(qtbot, service):
     _baseline_then_recent(service, recent_pct=10)
 
     tab = _tab(qtbot, service)
 
     table = tab.trend_table
     assert [table.horizontalHeaderItem(i).text() for i in range(5)] == [
-        "Window", "Used", "Cost per 1%", "Output per 1%", "vs typical",
+        "Window", "Used", "Cost per 1%", "Output per 1%", "vs baseline",
     ]
     assert _column(table, 1) == ["10%"] * 5 + ["20%"] * 3
     assert _column(table, 4)[0] == "+100%"
+    assert table.isColumnHidden(4)
     assert table.isColumnHidden(5)
     tab.trend_details_cb.setChecked(True)
     assert not tab.trend_table.isColumnHidden(5)
@@ -124,7 +153,10 @@ def test_skipped_windows_fold_into_one_line(qtbot, service):
 
     tab = _tab(qtbot, service)
 
-    assert tab.trend_headline_label.text() == "Needs 8 completed sessions to compare; 1 so far."
+    assert tab.trend_headline_label.text() == (
+        "Recent ballpark · latest session    ~$0.50 API-equiv. / 1%"
+        "    ·    ~50K output / 1%"
+    )
     assert tab.trend_skipped_btn.text() == (
         "▸ 2 windows not compared (too little used 1 · limit reached 1)"
     )
@@ -159,7 +191,8 @@ def test_weeks_compare_the_latest_week(qtbot, service):
 
     assert tab.trend_metric_buttons["Weekly"].isChecked()
     assert tab.trend_headline_label.text() == (
-        "Latest week: 1% of the limit covered about $1.00 of usage"
+        "Recent ballpark · latest week    ~$1.0 API-equiv. / 1%"
+        "    ·    ~100K output / 1%"
     )
 
 
@@ -169,7 +202,7 @@ def test_weeks_toggle_without_windows(qtbot, service):
 
     tab.set_trend_metric("Weekly")
 
-    assert tab.trend_headline_label.text() == "No completed weeks to compare yet."
+    assert tab.trend_headline_label.text() == "No completed weeks to summarize yet."
     assert tab.trend_table.item(0, 0).text() == "No compared weeks yet."
 
 
@@ -178,19 +211,51 @@ def test_mix_warning_when_recent_windows_used_other_models(qtbot, service):
 
     tab = _tab(qtbot, service)
 
-    assert not tab.trend_warning_label.isHidden()
-    assert "Mostly claude-opus-5 in the recent windows" in tab.trend_warning_label.text()
+    assert tab.trend_answer.isHidden()
+    assert tab.compare_change_btn.isHidden()
+    assert tab.trend_warning_label.text() == "Usage mix changed ⓘ"
+    assert "Mostly claude-opus-5 in the recent windows" in tab.trend_warning_label.toolTip()
 
 
-def test_chart_gets_compared_windows_and_typical_line(qtbot, service):
+def test_default_chart_focuses_on_the_rolling_trend_without_comparison_lines(qtbot, service):
     _baseline_then_recent(service, recent_pct=10)
 
     tab = _tab(qtbot, service)
 
     assert len(tab.trend_chart._points) == 8
-    assert tab.trend_chart._typical == pytest.approx(0.5)
+    assert tab.trend_chart._typical is None
+    assert tab.trend_chart._average_lines == []
+    assert tab.trend_chart._focus_trend
     tab.trend_chart.resize(500, 170)
     assert not tab.trend_chart.grab().isNull()
+
+
+def test_default_chart_clips_raw_outlier_to_keep_trend_readable(qtbot, service):
+    for index, pct in enumerate((20, 20, 20, 20, 20, 20, 20, 10), start=1):
+        _save(service, index, pct)
+    tab = _tab(qtbot, service)
+
+    tab.trend_chart.resize(500, 170)
+    assert not tab.trend_chart.grab().isNull()
+
+    assert tab.trend_chart._display_high is not None
+    assert tab.trend_chart._display_high < max(point[1] for point in tab.trend_chart._points)
+
+
+def test_opposing_metrics_collapse_explanation_into_mixed_signal_tooltip(qtbot, service):
+    for index in range(1, 4):
+        _save(service, index, 20, model="claude-opus-5")
+    for index in range(40, 45):
+        _save(service, index, 20, model="claude-sonnet-5", output=2_000_000)
+
+    tab = _tab(qtbot, service)
+    tab.set_limit_changes([datetime(2026, 9, 5, 12, tzinfo=UTC).astimezone().date()])
+    tab.compare_change_btn.click()
+
+    assert tab.trend_comparison.metrics[0].change < 0
+    assert tab.trend_comparison.metrics[1].change > 0
+    assert tab.trend_warning_label.text() == "Mixed signal ⓘ"
+    assert "opposite directions" in tab.trend_warning_label.toolTip()
 
 
 def test_trend_summary_text_without_windows():
@@ -206,7 +271,7 @@ def test_window_label_formats_session_and_week():
     assert window_label(start, start + timedelta(days=7)).count(" ") == 4
 
 
-def test_marking_a_limit_change_saves_it_and_restarts_the_baseline(qtbot, service):
+def test_marking_a_limit_change_keeps_and_compares_older_data(qtbot, service):
     for index in range(1, 5):
         _save(service, index, 20)
     _baseline_then_recent(service, recent_pct=20, start=40)
@@ -218,5 +283,40 @@ def test_marking_a_limit_change_saves_it_and_restarts_the_baseline(qtbot, servic
     saved = service.config.local_usage.claude.limit_changes
     assert saved
     assert Config.load().local_usage.claude.limit_changes == saved
-    assert "since the limit change on Sep 05" in tab.trend_detail_label.text()
-    assert "before a limit change 4" in tab.trend_skipped_btn.text()
+    assert tab.compare_change_btn.text() == "Compare Sep 05"
+    assert not tab.compare_change_btn.isHidden()
+    assert tab.trend_answer.isHidden()
+    assert "Recent ballpark" in tab.trend_headline_label.text()
+    assert tab.trend_chart._average_lines == []
+
+    tab.compare_change_btn.click()
+
+    assert not tab.trend_answer.isHidden()
+    assert tab.trend_headline_label.isHidden()
+    assert not tab.trend_table.isColumnHidden(4)
+    assert {point[3] for point in tab.trend_chart._points} == {0, 1}
+    assert len(tab.trend_chart._rolling) == 2
+    assert {line[3] for line in tab.trend_chart._average_lines} == {
+        "before avg", "recent avg",
+    }
+    assert not tab.trend_chart._focus_trend
+    assert tab.trend_skipped_btn.isHidden()
+
+
+def test_rolling_average_is_weighted_and_does_not_cross_a_change(service):
+    for index, pct in enumerate((10, 40, 20, 20), start=1):
+        _save(service, index, pct)
+    summaries = load_summaries(service.store, "claude", "Session")
+    change = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    report = build_trend(
+        summaries,
+        "Session",
+        load_rate_table(override_path=Path("does-not-exist.json")),
+        [change],
+    )
+
+    segments = rolling_average_points(report.rows, 2, dollars=True)
+
+    assert len(segments) == 2
+    assert [value for _when, value in segments[0]] == pytest.approx([1.0, 0.4])
+    assert [value for _when, value in segments[1]] == pytest.approx([0.5, 0.5])

@@ -27,8 +27,8 @@ class LimitChangesDialog(QDialog):
         layout = QVBoxLayout(self)
         intro = QLabel(
             f"Mark the dates {provider_name} changed its usage limits. The trend then "
-            "compares only windows after the latest change, and skips any window that "
-            "spans one."
+            "keeps the earlier history and compares the windows before and after each "
+            "change. A window that spans a change is skipped."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)

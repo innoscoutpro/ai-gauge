@@ -5,17 +5,19 @@ For each completed, comparable window:
     dollars per point        = window cost / percent at last reading
     output tokens per point  = window output tokens / percent at last reading
 
-The recent figure is the median of the last few compared windows (one by
-default; the Trend view uses five sessions, because single sessions swing
-widely). It is compared with the median of the comparable windows before them:
+The recent figure pools the last few compared windows (one by default; the
+Trend view uses five sessions, because single sessions swing widely):
 
-    change vs baseline       = recent / median(baseline windows) - 1
+    pooled dollars per point = total cost / total percentage used
+    change vs baseline       = recent pooled value / baseline pooled value - 1
 
 A baseline needs at least three windows. Figures across several windows divide
 total cost by total points; per-window ratios are never averaged.
 
-When the user marks a date a provider changed its limits, only windows after
-the latest change are compared, and a window that spans a change is skipped.
+When the user marks a date a provider changed its limits, it becomes a segment
+boundary. Valid windows on both sides remain visible, the current segment is
+compared with the immediately preceding segment, and only a window that spans
+a change is skipped.
 
 This is informational only: it never raises an alert and never feeds the
 quota percentages, the session ratio or the MCP guard.
@@ -57,7 +59,6 @@ REASON_INCOMPLETE = "logs missing for part of the window"
 REASON_TIME = "clock changed during the window"
 REASON_PERIOD = "different account, folder or plan"
 REASON_SPANS_CHANGE = "spans a limit change"
-REASON_BEFORE_CHANGE = "before the latest limit change"
 REASON_UNPRICED = "some models have no price"
 NOTE_PARTIAL_PRICE = "cost excludes unpriced models"
 
@@ -71,6 +72,7 @@ class TrendRow:
     output_per_point: float | None
     cache_share: float | None
     top_model: str | None
+    segment: int  # zero before the first marked change, then one per change
     reason: str  # COUNTED or why the window is left out
     dollars_reason: str  # COUNTED, or why only the dollar figure is left out
     dollars_note: str = ""  # set when the dollar figure leaves out a little unpriced usage
@@ -90,6 +92,7 @@ class Baseline:
     median: float | None
     low: float | None
     high: float | None
+    average: float | None = None  # pooled: total usage divided by total percentage
 
 
 @dataclass
@@ -103,13 +106,15 @@ class TrendReport:
     output_change: float | None
     pooled_dollars_per_point: float | None
     pooled_output_per_point: float | None
-    limit_change: datetime | None = None  # the change the baseline restarts from
+    limit_change: datetime | None = None  # boundary between the current and prior segments
     baseline_rows: list[TrendRow] = field(default_factory=list)
     recent_rows: list[TrendRow] = field(default_factory=list)
     recent_dollars_per_point: float | None = None
     recent_output_per_point: float | None = None
     recent_windows: int = 1
     compared_windows: int = 0
+    current_segment: int = 0
+    baseline_before_change: bool = False
 
     @property
     def collecting(self) -> bool:
@@ -166,7 +171,6 @@ def build_row(
     rates: RateTable,
     period_id: str | None,
     changes: list[datetime] = (),
-    current_segment: int = 0,
 ) -> TrendRow:
     cost = summarize_costs(summary.usage, rates)
     pct = summary.last_pct
@@ -174,8 +178,7 @@ def build_row(
     if reason == COUNTED and changes:
         if any(summary.window_start < change < summary.resets_at for change in changes):
             reason = REASON_SPANS_CHANGE
-        elif _segment(changes, summary.window_start) != current_segment:
-            reason = REASON_BEFORE_CHANGE
+    segment = _segment(changes, summary.window_start)
     usable_pct = pct if pct is not None and pct > 0 else None
     note = ""
     if not cost.has_unpriced:
@@ -197,27 +200,44 @@ def build_row(
         output_per_point=cost.tokens.output / usable_pct if usable_pct is not None else None,
         cache_share=cache_share(cost),
         top_model=top_model(cost),
+        segment=segment,
         reason=reason,
         dollars_reason=dollars_reason,
         dollars_note=note,
     )
 
 
-def _baseline(values: list[float]) -> Baseline:
+def _baseline(values: list[float], average: float | None) -> Baseline:
     if not values:
-        return Baseline(0, None, None, None)
-    return Baseline(len(values), statistics.median(values), min(values), max(values))
+        return Baseline(0, None, None, None, None)
+    return Baseline(len(values), statistics.median(values), min(values), max(values), average)
+
+
+def _pooled_dollars(rows: Iterable[TrendRow]) -> float | None:
+    present = [
+        row
+        for row in rows
+        if row.dollars_counted and row.pct and row.dollars_per_point is not None
+    ]
+    points = sum(row.pct or 0 for row in present)
+    return sum(row.cost.priced_cost for row in present) / points if points else None
+
+
+def _pooled_output(rows: Iterable[TrendRow]) -> float | None:
+    present = [row for row in rows if row.pct and row.output_per_point is not None]
+    points = sum(row.pct or 0 for row in present)
+    return sum(row.cost.tokens.output for row in present) / points if points else None
 
 
 def _change(recent: float | None, baseline: Baseline) -> float | None:
     if (
         recent is None
-        or baseline.median is None
-        or baseline.median <= 0
+        or baseline.average is None
+        or baseline.average <= 0
         or baseline.windows < BASELINE_MIN_WINDOWS
     ):
         return None
-    return recent / baseline.median - 1
+    return recent / baseline.average - 1
 
 
 def build_trend(
@@ -238,26 +258,41 @@ def build_trend(
     # the limit changes before its end define the segment being compared.
     period_id = completed[0].period_id if completed else None
     current_segment = _segment(changes, completed[0].resets_at) if completed else len(changes)
-    rows = [build_row(s, rates, period_id, changes, current_segment) for s in completed]
+    rows = [build_row(s, rates, period_id, changes) for s in completed]
     counted = [row for row in rows if row.counted]
+    current_rows = [row for row in counted if row.segment == current_segment]
     recent_windows = max(1, recent_windows)
-    recent = counted[:recent_windows]
-    earlier = counted[recent_windows : recent_windows + baseline_windows]
+    recent = current_rows[:recent_windows]
 
-    output_baseline = _baseline([r.output_per_point for r in earlier if r.output_per_point is not None])
-    dollars_baseline = _baseline(
-        [r.dollars_per_point for r in earlier if r.dollars_counted and r.dollars_per_point is not None]
+    # A marked change is a comparison boundary, not a history cutoff. Prefer
+    # the immediately preceding segment as the reference when it has enough
+    # data; otherwise fall back to an in-segment baseline once one develops.
+    previous = [row for row in counted if row.segment == current_segment - 1]
+    use_previous = current_segment > 0 and len(previous) >= BASELINE_MIN_WINDOWS
+    earlier = (
+        previous[:baseline_windows]
+        if use_previous
+        else current_rows[recent_windows : recent_windows + baseline_windows]
     )
-    recent_dollars = _median(r.dollars_per_point for r in recent if r.dollars_counted)
-    recent_output = _median(r.output_per_point for r in recent)
 
-    priced = [r for r in counted if r.dollars_counted]
+    output_baseline = _baseline(
+        [r.output_per_point for r in earlier if r.output_per_point is not None],
+        _pooled_output(earlier),
+    )
+    dollars_baseline = _baseline(
+        [r.dollars_per_point for r in earlier if r.dollars_counted and r.dollars_per_point is not None],
+        _pooled_dollars(earlier),
+    )
+    recent_dollars = _pooled_dollars(recent)
+    recent_output = _pooled_output(recent)
+
+    priced = [r for r in current_rows if r.dollars_counted]
     points_priced = sum(r.pct or 0 for r in priced)
-    points_all = sum(r.pct or 0 for r in counted)
+    points_all = sum(r.pct or 0 for r in current_rows)
     return TrendReport(
         metric=metric,
         rows=rows,
-        current=counted[0] if counted else None,
+        current=current_rows[0] if current_rows else None,
         dollars_baseline=dollars_baseline,
         output_baseline=output_baseline,
         dollars_change=_change(recent_dollars, dollars_baseline),
@@ -266,7 +301,7 @@ def build_trend(
             sum(r.cost.priced_cost for r in priced) / points_priced if points_priced else None
         ),
         pooled_output_per_point=(
-            sum(r.cost.tokens.output for r in counted) / points_all if points_all else None
+            sum(r.cost.tokens.output for r in current_rows) / points_all if points_all else None
         ),
         limit_change=changes[current_segment - 1] if current_segment else None,
         baseline_rows=earlier,
@@ -274,7 +309,9 @@ def build_trend(
         recent_dollars_per_point=recent_dollars,
         recent_output_per_point=recent_output,
         recent_windows=recent_windows,
-        compared_windows=len(counted),
+        compared_windows=len(current_rows),
+        current_segment=current_segment,
+        baseline_before_change=use_previous,
     )
 
 

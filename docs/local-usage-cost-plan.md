@@ -157,7 +157,8 @@ For each completed, comparable window:
 ```text
 dollars per point        = window cost / percent at last reading
 output tokens per point  = window output tokens / percent at last reading
-change vs baseline       = current / median(baseline windows) - 1
+pooled value             = total usage / total percentage used
+change vs baseline       = recent pooled value / baseline pooled value - 1
 ```
 
 - Across windows, divide total cost by total points; never average the per-window ratios.
@@ -166,7 +167,7 @@ change vs baseline       = current / median(baseline windows) - 1
   - it is incomplete or time-uncertain,
   - it has unpriced usage (for the dollar figure only),
   - it belongs to another comparison period (account, folder or plan changed; Codex `plan_type` changing counts).
-- Baseline: the median of at least 3 earlier comparable completed windows of the same metric. Show the range and the number of windows used. Before that, show "Collecting windows (n of 3)".
+- Baseline: the usage-weighted aggregate of at least 3 earlier comparable completed windows of the same metric. A marked limit change uses the immediately preceding segment as the baseline while keeping its points visible; only a window spanning the boundary is excluded. Show the range and the number of windows used. Before that, show "Collecting windows (n of 3)".
 - Show cache share (cache read tokens ÷ all input tokens) and the top model next to every trend row, because a different cache or model mix changes dollars per point without any change to the allowance.
 - No "your limit changed" alert. No influence on quota percentages, the ratio, or the MCP guard.
 - Model-specific limits (the Claude Fable weekly bar) are not compared at first. The per-model data makes it possible later: Fable-only cost divided by the Fable percentage.
@@ -204,7 +205,7 @@ Total              548   11.4K   184K     22.2M     1.4M      $12.40
 
 - **Model table:** one row per model, with message count, each token category (a column toggle adds 5m and 1h cache writes, reasoning tokens for Codex, and sidechain share), estimated cost, share of cost, and a small bar. Sorted by cost, with unpriced rows last. The range selector covers the current session, the current week, today, the last 7 days and the last 30 days; longer ranges use `daily_model_totals`.
 - **Daily:** one row per local date with total cost and a bar split by model; clicking a day filters the model table to that day.
-- **Allowance trend:** completed windows (Session or Weekly selector) with window, cost, percent, dollars per point, output tokens per point, cache share, top model, origin (live or backfill) and status (counted, or the reason it was left out). The baseline and change line sits above the table.
+- **Allowance trend:** completed windows (Session or Weekly selector) with window, cost, percent, dollars per point, output tokens per point, cache share, top model, origin (live or backfill) and status (counted, or the reason it was left out). By default, a compact recent ballpark sits above a historical chart of raw points and the rolling average; the chart focuses its scale on that trend and marks off-scale raw values at the edge. If a marked limit change has enough history, an optional comparison mode adds zero-based before/recent bars and exact-period reference lines. Method and model/cache-mix caveats live in tooltips instead of explanatory body copy.
 - Missing data shows as "unavailable", never 0. Old data shows its timestamp. While importing, numbers are marked "partial".
 - A short footer: "This computer's logs only · API-equivalent estimate", with an info button for the full disclosure.
 - The dialog resizes and scrolls, and works at small window sizes and high UI scaling.

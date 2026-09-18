@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.1 - 2026-09-17
+
+### Changed
+
+- Refined the **Trend** view around a rough, usage-weighted ballpark metric. Its everyday view is chart-first: one compact recent estimate sits above raw points and a connected rolling average, with unusually high raw points clipped into hoverable edge markers so they do not flatten the useful trend. Marked limit changes now preserve older history, and **Compare <date>** optionally reveals zero-based before/recent bars, exact-period reference lines, comparison percentages and mixed-signal context. Method and model/cache-mix explanations stay in tooltips.
+- Usage details now show concise Claude model names such as **Opus 5**, **Fable 5.1**, and **Haiku 4.5**. Exact model identifiers remain available on hover, and unfamiliar future identifiers are left unchanged rather than guessed.
+
 ## 0.8.0 - 2026-09-14
 
 ### Added

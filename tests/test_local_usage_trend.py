@@ -15,7 +15,6 @@ from aigauge.local_usage.tokens import TokenCounts
 from aigauge.local_usage.trend import (
     COUNTED,
     NOTE_PARTIAL_PRICE,
-    REASON_BEFORE_CHANGE,
     REASON_INCOMPLETE,
     REASON_LIMIT,
     REASON_LOW,
@@ -63,7 +62,7 @@ def test_collecting_until_three_earlier_windows(rates):
     assert report.dollars_change is None
 
 
-def test_change_is_current_over_median_of_earlier_windows(rates):
+def test_change_uses_weighted_average_of_earlier_windows(rates):
     # sonnet output $10 per million: 1M output at 20% is $0.50 per point
     windows = [_window(1, 20), _window(2, 40), _window(3, 20), _window(4, 10)]
 
@@ -71,11 +70,12 @@ def test_change_is_current_over_median_of_earlier_windows(rates):
 
     assert report.current.summary is windows[3]
     assert report.current.dollars_per_point == pytest.approx(1.0)
-    # earlier: $0.50, $0.25, $0.50 -> median $0.50
+    # Earlier: $30 of usage / 80 percentage points = $0.375 per point.
     assert report.dollars_baseline.median == pytest.approx(0.5)
     assert (report.dollars_baseline.low, report.dollars_baseline.high) == (0.25, 0.5)
-    assert report.dollars_change == pytest.approx(1.0)
-    assert report.output_change == pytest.approx(1.0)
+    assert report.dollars_baseline.average == pytest.approx(0.375)
+    assert report.dollars_change == pytest.approx(1.0 / 0.375 - 1)
+    assert report.output_change == pytest.approx(1.0 / 0.375 - 1)
 
 
 def test_pooled_figures_divide_totals_rather_than_average_ratios(rates):
@@ -178,7 +178,7 @@ def test_small_unpriced_share_still_gets_a_cost_per_point(rates):
     assert row.dollars_per_point == pytest.approx(10.0 / 20)
 
 
-def test_limit_change_restarts_the_baseline_and_skips_spanning_windows(rates):
+def test_limit_change_keeps_before_data_and_skips_only_spanning_window(rates):
     windows = [_window(i, 20) for i in range(1, 7)]
     change = windows[3].window_start + timedelta(hours=1)  # inside window 4
 
@@ -188,9 +188,12 @@ def test_limit_change_restarts_the_baseline_and_skips_spanning_windows(rates):
     assert reasons[windows[5].resets_at] == COUNTED
     assert reasons[windows[4].resets_at] == COUNTED
     assert reasons[windows[3].resets_at] == REASON_SPANS_CHANGE
-    assert reasons[windows[2].resets_at] == REASON_BEFORE_CHANGE
+    assert reasons[windows[2].resets_at] == COUNTED
     assert report.limit_change == change
-    assert report.collecting
+    assert report.baseline_before_change
+    assert [row.summary for row in report.baseline_rows] == windows[2::-1]
+    assert [row.summary for row in report.recent_rows] == [windows[5]]
+    assert not report.collecting
 
 
 def test_mix_warning_names_a_different_top_model(rates):
@@ -209,13 +212,14 @@ def test_no_mix_warning_before_a_baseline_exists(rates):
     assert mix_warnings(build_trend(windows, "Session", rates)) == []
 
 
-def test_recent_windows_use_their_median_against_the_windows_before(rates):
+def test_recent_windows_pool_usage_instead_of_averaging_ratios(rates):
     windows = [_window(i, 20) for i in range(1, 4)] + [_window(4, 10), _window(5, 40), _window(6, 10)]
 
     report = build_trend(windows, "Session", rates, recent_windows=3)
 
-    # recent: $1.00, $0.25, $1.00 -> median $1.00 against a baseline of $0.50
-    assert report.recent_dollars_per_point == pytest.approx(1.0)
-    assert report.dollars_change == pytest.approx(1.0)
+    # Recent: $30 of usage / 60 percentage points = $0.50, not the $0.75
+    # arithmetic mean or the $1.00 median of the per-window ratios.
+    assert report.recent_dollars_per_point == pytest.approx(0.5)
+    assert report.dollars_change == pytest.approx(0.0)
     assert [r.summary for r in report.baseline_rows] == windows[2::-1]
     assert report.compared_windows == 6

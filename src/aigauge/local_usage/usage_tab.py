@@ -8,12 +8,14 @@ tables grow to fit their rows instead of scrolling inside it.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -53,7 +55,6 @@ from .summaries import ORIGIN_BACKFILL, load_summaries
 from .trend import (
     BASELINE_MIN_WINDOWS,
     COUNTED,
-    REASON_BEFORE_CHANGE,
     REASON_INCOMPLETE,
     REASON_LIMIT,
     REASON_LOW,
@@ -63,6 +64,7 @@ from .trend import (
     REASON_TIME,
     UNPRICED_TOLERANCE,
     TrendReport,
+    TrendRow,
     build_trend,
     mix_warnings,
 )
@@ -107,6 +109,8 @@ MODEL_DISPLAY_NAMES = {
     "codex-auto-review": "Automatic review",
     "unknown": "Unidentified",
 }
+_CLAUDE_FAMILIES = {"opus", "sonnet", "haiku", "fable", "mythos"}
+_MODEL_DATE_SUFFIX = re.compile(r"-20\d{6}$")
 UNPRICED_DISPLAY_NAMES = {
     "codex-auto-review": "automatic review",
     "unknown": "unidentified usage",
@@ -127,19 +131,21 @@ MODEL_COLUMNS = (
     ("sidechain", "Subagent %", True),
 )
 _COLUMN_INDEX = {key: i for i, (key, _title, _details) in enumerate(MODEL_COLUMNS)}
-# The first five columns always show; the rest appear with "Details".
+# The first four columns always show; the comparison column is opt-in and the
+# remaining columns appear with "Details".
 TREND_COLUMNS = (
-    "Window", "Used", "Cost per 1%", "Output per 1%", "vs typical",
+    "Window", "Used", "Cost per 1%", "Output per 1%", "vs baseline",
     "Est. cost", "Cache share", "Top model", "Source",
 )
 TREND_BASIC_COLUMNS = 5
 TREND_RECENT_ROWS = 20
 TREND_CHART_POINTS = 60
 TREND_UNITS = {SESSION: ("session", "sessions"), WEEKLY: ("week", "weeks")}
-# Single sessions swing widely, so the answer uses the median of the last five
-# against the twenty before them. A week is already an aggregate.
+# Pool recent usage across several windows so a short session does not carry
+# the same weight as a large one. A week is already an aggregate.
 TREND_RECENT = {SESSION: 5, WEEKLY: 1}
 TREND_BASELINE = {SESSION: 20, WEEKLY: 8}
+TREND_ROLLING = {SESSION: 5, WEEKLY: 4}
 # About the same as usual when within this share of the typical value.
 SAME_AS_USUAL = 0.10
 SHORT_REASONS = {
@@ -150,16 +156,38 @@ SHORT_REASONS = {
     REASON_TIME: "clock change",
     REASON_PERIOD: "different account or plan",
     REASON_SPANS_CHANGE: "spans a limit change",
-    REASON_BEFORE_CHANGE: "before a limit change",
 }
 TREND_DEFINITION = (
     "Cost per 1% is what a window's usage would cost at API prices, divided by how "
-    "much of the limit it used. Higher means the limit covered more."
+    "much of the limit it used. Higher means the limit covered more. Dots are individual "
+    "windows; the solid line is a usage-weighted rolling average. This is a rough signal: "
+    "model choice and cache use can move it even when the provider's limit is unchanged."
 )
 
 
 def display_model_name(model: str) -> str:
-    return MODEL_DISPLAY_NAMES.get(model, model)
+    explicit = MODEL_DISPLAY_NAMES.get(model)
+    if explicit is not None:
+        return explicit
+
+    # Claude has used both family-first IDs (claude-sonnet-4-5) and
+    # version-first IDs (claude-3-5-sonnet). Recognize only that stable shape,
+    # remove a terminal YYYYMMDD release tag, and leave anything unfamiliar
+    # untouched rather than guessing at a misleading friendly name.
+    if not model.startswith("claude-"):
+        return model
+    body = _MODEL_DATE_SUFFIX.sub("", model.removeprefix("claude-"))
+    parts = body.split("-")
+    families = [part for part in parts if part in _CLAUDE_FAMILIES]
+    if len(families) != 1:
+        return model
+    family = families[0]
+    remainder = [part for part in parts if part != family]
+    if remainder and remainder[-1] == "latest":
+        remainder.pop()
+    if not remainder or any(not part.isdigit() for part in remainder):
+        return model
+    return f"{family.title()} {'.'.join(remainder)}"
 
 
 def unpriced_note(summary: CostSummary) -> str:
@@ -185,6 +213,12 @@ _CHIP_STYLE = (
     "QPushButton { background:#1e3a8a; color:#dbeafe; border:1px solid #1d4ed8; "
     "border-radius:10px; padding:2px 10px; min-height:18px; }"
 )
+_COMPARE_STYLE = (
+    "QPushButton { background:transparent; color:#93c5fd; border:1px solid #3b82f6; "
+    "border-radius:10px; padding:2px 10px; min-height:18px; }"
+    "QPushButton:checked { background:#1e3a8a; color:#eff6ff; }"
+    "QPushButton:hover { color:#f3f4f6; }"
+)
 
 
 # ---- formatting ----
@@ -202,6 +236,12 @@ def format_tokens(value: float | None) -> str:
     if value < 1_000_000_000:
         return f"{value / 1_000_000:.1f}M"
     return f"{value / 1_000_000_000:.1f}B"
+
+
+def format_ballpark_cost(value: float | None) -> str:
+    if value is None:
+        return UNAVAILABLE
+    return f"~${value:.1f}" if value >= 1 else f"~${value:.2f}"
 
 
 def format_time_left(resets_at: datetime, now: datetime) -> str:
@@ -225,10 +265,10 @@ def _signed_percent(change: float) -> str:
     return f"{change * 100:+.0f}%"
 
 
-def _verdict(change: float) -> str:
+def _verdict(change: float, reference: str = "usual") -> str:
     if abs(change) <= SAME_AS_USUAL:
-        return "About the same as usual"
-    return f"{abs(change) * 100:.0f}% {'more' if change > 0 else 'less'} than usual"
+        return f"About the same as {reference}"
+    return f"{abs(change) * 100:.0f}% {'more' if change > 0 else 'less'} than {reference}"
 
 
 def trend_summary_lines(report: TrendReport, metric: str = SESSION) -> list[str]:
@@ -241,37 +281,44 @@ def trend_summary_lines(report: TrendReport, metric: str = SESSION) -> list[str]
         return [f"No completed {units} to compare yet."]
     if report.collecting:
         needed = report.recent_windows + BASELINE_MIN_WINDOWS
-        needs = f"eeds {needed} completed {units} to compare; {report.compared_windows} so far."
+        message = f"Needs {needed} completed {units} to compare; {report.compared_windows} so far."
         if change_day:
-            return [f"Since the limit change on {change_day}: n{needs}"]
-        return [f"N{needs}"]
-    since = f" since the limit change on {change_day}" if change_day else ""
-    lead = f"Last {report.recent_windows} {units}" if report.recent_windows > 1 else f"Latest {unit}"
+            return [f"Since the limit change on {change_day}: {message.lower()}"]
+        return [message]
+    recent_count = len(report.recent_rows)
+    lead = f"Last {recent_count} {units}" if recent_count > 1 else f"Latest {unit}"
+    if report.baseline_before_change and change_day:
+        lead = f"Since {change_day}, {lead.lower()}"
+    reference = "before" if report.baseline_before_change else "usual"
+    baseline_label = "before-change average" if report.baseline_before_change else "earlier average"
+    baseline_suffix = f" before {change_day}" if report.baseline_before_change and change_day else ""
     dollars = report.dollars_baseline
     output = report.output_baseline
     lines = []
     if report.dollars_change is not None and report.recent_dollars_per_point is not None:
         lines.append(
-            f"{lead}: 1% of the limit covered about "
-            f"{format_cost(report.recent_dollars_per_point)} of usage"
+            f"{lead} averaged {format_cost(report.recent_dollars_per_point)} of usage "
+            "per 1% of the limit"
         )
         lines.append(
-            f"{_verdict(report.dollars_change)} (typical {format_cost(dollars.median)}, "
-            f"from {dollars.windows} earlier {units}{since})"
+            f"{_verdict(report.dollars_change, reference)} "
+            f"({baseline_label} {format_cost(dollars.average)}, from "
+            f"{dollars.windows} {units}{baseline_suffix})"
         )
         if report.output_change is not None and report.recent_output_per_point is not None:
             lines.append(
                 f"Output per 1%: {format_tokens(report.recent_output_per_point)}, "
-                f"{_verdict(report.output_change).lower()}"
+                f"{_verdict(report.output_change, reference).lower()}"
             )
     elif report.output_change is not None and report.recent_output_per_point is not None:
         lines.append(
-            f"{lead}: 1% of the limit covered about "
-            f"{format_tokens(report.recent_output_per_point)} output tokens"
+            f"{lead} averaged {format_tokens(report.recent_output_per_point)} output tokens "
+            "per 1% of the limit"
         )
         lines.append(
-            f"{_verdict(report.output_change)} (typical {format_tokens(output.median)}, "
-            f"from {output.windows} earlier {units}{since})"
+            f"{_verdict(report.output_change, reference)} "
+            f"({baseline_label} {format_tokens(output.average)}, from "
+            f"{output.windows} {units}{baseline_suffix})"
         )
         lines.append("Cost per 1% isn't compared: too few windows have a price for every model.")
     else:
@@ -281,6 +328,23 @@ def trend_summary_lines(report: TrendReport, metric: str = SESSION) -> list[str]
 
 def trend_summary_text(report: TrendReport, metric: str = SESSION) -> str:
     return "\n".join(trend_summary_lines(report, metric))
+
+
+def trend_recent_text(report: TrendReport, metric: str = SESSION) -> str:
+    """Compact everyday readout; detailed comparison is an optional mode."""
+    unit, units = TREND_UNITS.get(metric, ("window", "windows"))
+    count = len(report.recent_rows)
+    if not count:
+        return f"No completed {units} to summarize yet."
+    window_text = f"{count} {units}" if count > 1 else f"latest {unit}"
+    values = []
+    if report.recent_dollars_per_point is not None:
+        values.append(f"{format_ballpark_cost(report.recent_dollars_per_point)} API-equiv. / 1%")
+    if report.recent_output_per_point is not None:
+        values.append(f"~{format_tokens(report.recent_output_per_point)} output / 1%")
+    if not values:
+        return f"Recent ballpark · {window_text}"
+    return f"Recent ballpark · {window_text}    " + "    ·    ".join(values)
 
 
 def _label(text: str = "", color: str = TEXT, size: int = 11, bold: bool = False) -> QLabel:
@@ -325,22 +389,170 @@ class _Bar(QWidget):
         painter.end()
 
 
+@dataclass(frozen=True)
+class ComparisonMetric:
+    title: str
+    before: float
+    recent: float
+    before_text: str
+    recent_text: str
+    change: float
+
+
+class _TrendComparison(QWidget):
+    """Compact zero-based before/recent bars for the two ballpark metrics."""
+
+    ROW_HEIGHT = 46
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.metrics: list[ComparisonMetric] = []
+        self.reference_label = "Earlier"
+        self.setMinimumHeight(1)
+
+    def set_data(
+        self,
+        metrics: list[ComparisonMetric],
+        tooltip: str = "",
+        reference_label: str = "Earlier",
+    ) -> None:
+        self.metrics = list(metrics)
+        self.reference_label = reference_label
+        self.setFixedHeight(max(1, self.ROW_HEIGHT * len(self.metrics)))
+        self.setToolTip(tooltip)
+        self.setHidden(not self.metrics)
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802
+        if not self.metrics:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        margin = 2.0
+        title_width = min(155.0, self.width() * 0.25)
+        delta_width = 64.0
+        bars_left = margin + title_width
+        bars_width = max(80.0, self.width() - bars_left - delta_width - margin)
+        tag_width = 48.0
+        value_width = 60.0
+        track_left = bars_left + tag_width
+        track_width = max(20.0, bars_width - tag_width - value_width - 8.0)
+        value_left = track_left + track_width + 6.0
+        align_left = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        align_right = int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        font = painter.font()
+        font.setPixelSize(11)
+        painter.setFont(font)
+        for index, metric in enumerate(self.metrics):
+            top = index * self.ROW_HEIGHT
+            maximum = max(metric.before, metric.recent, 1e-9)
+            title_font = painter.font()
+            title_font.setBold(True)
+            painter.setFont(title_font)
+            painter.setPen(QColor(TEXT))
+            painter.drawText(
+                QRectF(margin, top, title_width - 8, self.ROW_HEIGHT),
+                align_left,
+                metric.title,
+            )
+            painter.setFont(font)
+
+            for row, (tag, value, text, color) in enumerate(
+                (
+                    (self.reference_label, metric.before, metric.before_text, "#94a3b8"),
+                    ("Recent", metric.recent, metric.recent_text, "#60a5fa"),
+                )
+            ):
+                y = top + 7 + row * 19
+                painter.setPen(QColor(MUTED if row == 0 else "#bfdbfe"))
+                painter.drawText(QRectF(bars_left, y - 5, tag_width - 4, 14), align_left, tag)
+                track = QRectF(track_left, y, track_width, 7)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#1f2937"))
+                painter.drawRoundedRect(track, 3, 3)
+                fill = QRectF(track_left, y, track_width * value / maximum, 7)
+                painter.setBrush(QColor(color))
+                painter.drawRoundedRect(fill, 3, 3)
+                painter.setPen(QColor(TEXT))
+                painter.drawText(QRectF(value_left, y - 5, value_width, 14), align_right, text)
+
+            painter.setPen(QColor(TEXT))
+            painter.drawText(
+                QRectF(self.width() - delta_width, top, delta_width - margin, self.ROW_HEIGHT),
+                align_right,
+                _signed_percent(metric.change),
+            )
+        painter.end()
+
+
+def rolling_average_points(
+    rows: list[TrendRow], window: int, *, dollars: bool
+) -> list[list[tuple[datetime, float]]]:
+    """Usage-weighted rolling averages, split at every marked limit change."""
+    segments: dict[int, list[TrendRow]] = {}
+    for row in sorted(rows, key=lambda item: item.summary.resets_at):
+        if not row.counted or not row.pct:
+            continue
+        if dollars and not row.dollars_counted:
+            continue
+        segments.setdefault(row.segment, []).append(row)
+
+    result = []
+    for segment_rows in segments.values():
+        points = []
+        for index, row in enumerate(segment_rows):
+            bucket = segment_rows[max(0, index - window + 1) : index + 1]
+            total_pct = sum(item.pct or 0 for item in bucket)
+            if dollars:
+                total_usage = sum(item.cost.priced_cost for item in bucket)
+            else:
+                total_usage = sum(item.cost.tokens.output for item in bucket)
+            if total_pct:
+                points.append((row.summary.resets_at, total_usage / total_pct))
+        if points:
+            result.append(points)
+    return result
+
+
 class _TrendChart(QWidget):
-    """Cost (or output) per 1% of compared windows over time."""
+    """Raw allowance windows with a usage-weighted rolling trend."""
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setFixedHeight(170)
         self.setMouseTracking(True)
-        self._points: list[tuple[datetime, float, str]] = []
+        self._points: list[tuple[datetime, float, str, int]] = []
+        self._rolling: list[list[tuple[datetime, float]]] = []
+        self._average_lines: list[tuple[datetime, datetime, float, str, str]] = []
+        self._current_segment = 0
+        self._focus_trend = False
+        self._display_high: float | None = None
         self._typical: float | None = None
         self._changes: list[datetime] = []
         self._format: Callable[[float], str] = format_cost
         self._title = ""
         self._screen: list[tuple[QPointF, str]] = []
 
-    def set_data(self, points, typical, changes, value_format, title) -> None:
+    def set_data(
+        self,
+        points,
+        typical,
+        changes,
+        value_format,
+        title,
+        *,
+        rolling=(),
+        average_lines=(),
+        current_segment=0,
+        focus_trend=False,
+    ) -> None:
         self._points = list(points)
+        self._rolling = [list(segment) for segment in rolling]
+        self._average_lines = list(average_lines)
+        self._current_segment = current_segment
+        self._focus_trend = focus_trend
+        self._display_high = None
         self._typical = typical
         self._changes = list(changes)
         self._format = value_format
@@ -368,8 +580,16 @@ class _TrendChart(QWidget):
                              "Not enough compared windows to chart yet.")
             painter.end()
             return
-        values = [value for _when, value, _label in self._points]
-        high = max(values + ([self._typical] if self._typical else [])) * 1.15 or 1.0
+        values = [value for _when, value, _label, _segment in self._points]
+        trend_values = [value for segment in self._rolling for _when, value in segment]
+        trend_values.extend(
+            value for _start, _end, value, _label, _color in self._average_lines
+        )
+        if self._typical:
+            trend_values.append(self._typical)
+        scale_values = trend_values if self._focus_trend and trend_values else values + trend_values
+        high = max(scale_values) * 1.15 or 1.0
+        self._display_high = high
         start, end = self._points[0][0], self._points[-1][0]
         span = (end - start).total_seconds() or 1.0
 
@@ -391,7 +611,7 @@ class _TrendChart(QWidget):
                          end.astimezone().strftime("%b %d"))
 
         for change in self._changes:
-            if change <= start:
+            if change <= start or change >= end:
                 continue
             x = x_at(change)
             painter.setPen(QPen(QColor(AMBER), 1, Qt.PenStyle.DashLine))
@@ -408,16 +628,61 @@ class _TrendChart(QWidget):
             painter.setPen(QPen(QColor(MUTED), 1, Qt.PenStyle.DashLine))
             painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
             painter.setPen(QColor(MUTED))
-            painter.drawText(QRectF(plot.right() - 80, y - 14, 80, 12), align_right, "typical")
+            painter.drawText(
+                QRectF(plot.right() - 90, y - 14, 90, 12), align_right, "earlier avg"
+            )
+
+        for line_start, line_end, value, label, color in self._average_lines:
+            y = y_at(value)
+            x1, x2 = x_at(line_start), x_at(line_end)
+            painter.setPen(QPen(QColor(color), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(QPointF(x1, y), QPointF(x2, y))
+            painter.setPen(QColor(color))
+            painter.drawText(QRectF(x1 + 3, y - 14, max(75.0, x2 - x1 - 6), 12), align_left, label)
+
+        for segment in self._rolling:
+            if len(segment) < 2:
+                continue
+            is_current = any(
+                point_segment == self._current_segment and point_when == segment[-1][0]
+                for point_when, _value, _label, point_segment in self._points
+            )
+            painter.setPen(QPen(QColor("#60a5fa" if is_current else "#94a3b8"), 2))
+            for first, second in zip(segment, segment[1:]):
+                painter.drawLine(
+                    QPointF(x_at(first[0]), y_at(first[1])),
+                    QPointF(x_at(second[0]), y_at(second[1])),
+                )
 
         painter.setPen(Qt.PenStyle.NoPen)
         last = len(self._points) - 1
-        for index, (when, value, label) in enumerate(self._points):
-            point = QPointF(x_at(when), y_at(value))
-            painter.setBrush(QColor("#f9fafb" if index == last else "#60a5fa"))
+        for index, (when, value, label, segment) in enumerate(self._points):
+            clipped = value > high
+            point = QPointF(x_at(when), plot.top() + 2 if clipped else y_at(value))
+            if index == last:
+                color = "#f9fafb"
+            elif segment == self._current_segment:
+                color = "#60a5fa"
+            else:
+                color = "#94a3b8"
+            painter.setBrush(QColor(color))
             radius = 4.5 if index == last else 3.0
-            painter.drawEllipse(point, radius, radius)
-            self._screen.append((point, f"{label}: {self._format(value)} per 1%"))
+            if clipped:
+                painter.drawPolygon(
+                    QPolygonF(
+                        [
+                            QPointF(point.x(), plot.top()),
+                            QPointF(point.x() - 4.5, plot.top() + 8),
+                            QPointF(point.x() + 4.5, plot.top() + 8),
+                        ]
+                    )
+                )
+            else:
+                painter.drawEllipse(point, radius, radius)
+            suffix = " (above displayed range)" if clipped else ""
+            self._screen.append(
+                (point, f"{label}: {self._format(value)} per 1%{suffix}")
+            )
         painter.end()
 
     def mouseMoveEvent(self, event):  # noqa: N802
@@ -609,6 +874,8 @@ class UsageCostTab(QWidget):
         self._trend_metric = SESSION
         self._trend_show_all = False
         self._trend_skipped_open = False
+        self._trend_compare_change = False
+        self._trend_compare_available = False
         self._connected = False
 
         root = QVBoxLayout(self)
@@ -706,10 +973,19 @@ class UsageCostTab(QWidget):
         self.trend_metric_buttons[self._trend_metric].setChecked(True)
         bar.addWidget(self._trend_metric_bar)
         bar.addSpacing(6)
+        self.compare_change_btn = QPushButton("Compare change")
+        self.compare_change_btn.setObjectName("usage_compare_change_btn")
+        self.compare_change_btn.setCheckable(True)
+        self.compare_change_btn.setStyleSheet(_COMPARE_STYLE)
+        self.compare_change_btn.setToolTip("Show the before/after comparison for the marked change")
+        self.compare_change_btn.toggled.connect(self._set_compare_change)
+        self.compare_change_btn.setHidden(True)
+        bar.addWidget(self.compare_change_btn)
+        bar.addSpacing(6)
         self.limit_changes_btn = QPushButton("Limits changed…")
         self.limit_changes_btn.setObjectName("usage_limit_changes_btn")
         self.limit_changes_btn.setToolTip(
-            "Mark when the provider changed its limits, so the trend starts a fresh baseline"
+            "Mark when the provider changed its limits to compare usage before and after"
         )
         self.limit_changes_btn.clicked.connect(self._edit_limit_changes)
         bar.addWidget(self.limit_changes_btn)
@@ -758,9 +1034,13 @@ class UsageCostTab(QWidget):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        layout.addWidget(_label("Is your allowance going as far as usual?", TEXT, 13, bold=True))
+
+        self.trend_headline_label = _label("", TEXT, 12, bold=True)
+        self.trend_headline_label.setWordWrap(True)
+        layout.addWidget(self.trend_headline_label)
 
         box = QFrame()
+        self.trend_answer = box
         box.setObjectName("trend_answer")
         box.setStyleSheet(
             "QFrame#trend_answer { background:#111827; border:1px solid #374151; border-radius:6px; }"
@@ -768,18 +1048,18 @@ class UsageCostTab(QWidget):
         box_layout = QVBoxLayout(box)
         box_layout.setContentsMargins(12, 10, 12, 10)
         box_layout.setSpacing(4)
-        self.trend_headline_label = _label("", TEXT, 15, bold=True)
-        self.trend_detail_label = _label("", TEXT, 12)
+        self.trend_comparison = _TrendComparison()
+        box_layout.addWidget(self.trend_comparison)
+        self.trend_detail_label = _label("", MUTED, 10)
         self.trend_warning_label = _label("", AMBER, 11)
-        for label in (self.trend_headline_label, self.trend_detail_label, self.trend_warning_label):
+        for label in (self.trend_detail_label, self.trend_warning_label):
             label.setWordWrap(True)
             box_layout.addWidget(label)
+        box.setHidden(True)
         layout.addWidget(box)
-        definition = _label(TREND_DEFINITION, DIM, 10)
-        definition.setWordWrap(True)
-        layout.addWidget(definition)
 
         self.trend_chart = _TrendChart()
+        self.trend_chart.setToolTip(TREND_DEFINITION)
         layout.addWidget(self.trend_chart)
 
         self.trend_table = _table(TREND_COLUMNS)
@@ -864,6 +1144,9 @@ class UsageCostTab(QWidget):
         self.range_combo.setHidden(key != VIEW_MODEL)
         self.day_chip.setHidden(key != VIEW_MODEL or self._day_filter is None)
         self._trend_metric_bar.setHidden(key != VIEW_TREND)
+        self.compare_change_btn.setHidden(
+            key != VIEW_TREND or not self._trend_compare_available
+        )
         self.limit_changes_btn.setHidden(key != VIEW_TREND)
         if changed:
             self._remember_display_choice("details_view", key)
@@ -1072,7 +1355,13 @@ class UsageCostTab(QWidget):
                 ),
             }
             for col_key, (text, right, text_color) in values.items():
-                table.setItem(row, _COLUMN_INDEX[col_key], _item(text, right=right, color=text_color))
+                item = _item(text, right=right, color=text_color)
+                if (
+                    col_key == "model"
+                    and display_model_name(model_row.model) != model_row.model
+                ):
+                    item.setToolTip(model_row.model)
+                table.setItem(row, _COLUMN_INDEX[col_key], item)
             share = summary.share(model_row)
             if share is None:
                 table.setItem(row, share_column, _item("n/a", right=False, color=DIM))
@@ -1127,6 +1416,12 @@ class UsageCostTab(QWidget):
                 for m in models
             )
         )
+        friendly_models = [
+            f"{display_model_name(model)} — {model}"
+            for model in models
+            if display_model_name(model) != model
+        ]
+        self.day_legend.setToolTip("\n".join(friendly_models))
         peak = max((s.priced_cost for s in summaries.values()), default=0.0) or 1.0
         days = sorted(summaries, reverse=True)
         table.setRowCount(len(days))
@@ -1205,6 +1500,10 @@ class UsageCostTab(QWidget):
         self._trend_skipped_open = not self._trend_skipped_open
         self.refresh()
 
+    def _set_compare_change(self, enabled: bool) -> None:
+        self._trend_compare_change = enabled
+        self.refresh()
+
     def _refresh_trend(self, available: bool) -> None:
         metric = self._trend_metric
         _unit, units = TREND_UNITS.get(metric, ("window", "windows"))
@@ -1217,11 +1516,21 @@ class UsageCostTab(QWidget):
             table.setColumnHidden(column, not self.trend_details_cb.isChecked())
 
         if not available:
-            self.trend_headline_label.setText("Nothing to compare yet.")
+            self._trend_compare_available = False
+            self._trend_compare_change = False
+            self.compare_change_btn.blockSignals(True)
+            self.compare_change_btn.setChecked(False)
+            self.compare_change_btn.blockSignals(False)
+            self.compare_change_btn.setHidden(True)
+            self.trend_comparison.set_data([])
+            self.trend_answer.setHidden(True)
+            self.trend_headline_label.setText("Nothing to summarize yet.")
+            self.trend_headline_label.setHidden(False)
             self.trend_detail_label.setText("")
             self.trend_detail_label.setHidden(True)
             self.trend_warning_label.setHidden(True)
             self.trend_chart.set_data([], None, [], format_cost, "")
+            table.setColumnHidden(4, True)
             _placeholder(table, f"No compared {units} yet.")
             _fit(table)
             self.trend_show_all_btn.setHidden(True)
@@ -1231,32 +1540,200 @@ class UsageCostTab(QWidget):
 
         report = self.trend_report()
         lines = trend_summary_lines(report, metric)
-        self.trend_headline_label.setText(lines[0])
+        self.trend_headline_label.setText(trend_recent_text(report, metric))
+        self.trend_headline_label.setToolTip(TREND_DEFINITION)
         self.trend_detail_label.setText("\n".join(lines[1:]))
-        self.trend_detail_label.setHidden(len(lines) < 2)
+        metrics = []
+        if (
+            report.dollars_change is not None
+            and report.dollars_baseline.average is not None
+            and report.recent_dollars_per_point is not None
+        ):
+            metrics.append(
+                ComparisonMetric(
+                    "API-equiv. / 1%",
+                    report.dollars_baseline.average,
+                    report.recent_dollars_per_point,
+                    format_cost(report.dollars_baseline.average),
+                    format_cost(report.recent_dollars_per_point),
+                    report.dollars_change,
+                )
+            )
+        if (
+            report.output_change is not None
+            and report.output_baseline.average is not None
+            and report.recent_output_per_point is not None
+        ):
+            metrics.append(
+                ComparisonMetric(
+                    "Output / 1%",
+                    report.output_baseline.average,
+                    report.recent_output_per_point,
+                    format_tokens(report.output_baseline.average),
+                    format_tokens(report.recent_output_per_point),
+                    report.output_change,
+                )
+            )
+        recent_count = len(report.recent_rows)
+        baseline_period = (
+            f"the {report.dollars_baseline.windows or report.output_baseline.windows} windows "
+            "before the marked change"
+            if report.baseline_before_change
+            else "the earlier baseline windows"
+        )
+        comparison_tip = (
+            f"Ballpark comparison. Recent pools the last {recent_count} {units}; the reference "
+            f"pools {baseline_period}. Each average is total usage divided by total percentage used. "
+            "Model choice and cache use can move these values."
+        )
+        self.trend_comparison.set_data(
+            metrics,
+            comparison_tip,
+            reference_label="Before" if report.baseline_before_change else "Earlier",
+        )
+        self._trend_compare_available = bool(metrics) and report.baseline_before_change
+        if not self._trend_compare_available:
+            self._trend_compare_change = False
+        self.compare_change_btn.blockSignals(True)
+        self.compare_change_btn.setChecked(self._trend_compare_change)
+        self.compare_change_btn.blockSignals(False)
+        if report.limit_change:
+            self.compare_change_btn.setText(
+                f"Compare {report.limit_change.astimezone():%b %d}"
+            )
+        self.compare_change_btn.setHidden(
+            self._view != VIEW_TREND or not self._trend_compare_available
+        )
+        show_compare = self._trend_compare_available and self._trend_compare_change
+        table.setColumnHidden(4, not show_compare)
+        self.trend_answer.setHidden(not show_compare)
+        self.trend_headline_label.setHidden(show_compare)
+        self.trend_detail_label.setHidden(True)
         warnings = mix_warnings(report)
-        self.trend_warning_label.setText("\n".join(f"⚠ {warning}" for warning in warnings))
-        self.trend_warning_label.setHidden(not warnings)
+        mixed = (
+            report.dollars_change is not None
+            and report.output_change is not None
+            and report.dollars_change * report.output_change < 0
+        )
+        if mixed:
+            self.trend_warning_label.setText("Mixed signal ⓘ")
+            warning_tip = (
+                "API-equivalent value and output moved in opposite directions. This usually "
+                "means the model or cache mix changed, so treat the percentages as ballpark."
+            )
+        elif warnings:
+            self.trend_warning_label.setText("Usage mix changed ⓘ")
+            warning_tip = "\n".join(warnings)
+        else:
+            self.trend_warning_label.setText("")
+            warning_tip = ""
+        if warnings and mixed:
+            warning_tip += "\n\n" + "\n".join(warnings)
+        self.trend_warning_label.setToolTip(warning_tip)
+        self.trend_warning_label.setHidden(not (mixed or warnings))
 
         counted = [row for row in report.rows if row.counted]
         changes = [local_day_bounds(day)[0] for day in self.limit_change_dates()]
-        recent = list(reversed(counted[:TREND_CHART_POINTS]))
-        if any(row.dollars_per_point is not None for row in counted):
+        if show_compare and report.current_segment > 0:
+            current_rows = [row for row in counted if row.segment == report.current_segment]
+            previous_rows = [row for row in counted if row.segment == report.current_segment - 1]
+            previous_count = min(len(previous_rows), TREND_CHART_POINTS // 2)
+            chart_rows = (
+                current_rows[: TREND_CHART_POINTS - previous_count]
+                + previous_rows[:previous_count]
+            )
+        else:
+            chart_rows = counted[:TREND_CHART_POINTS]
+        chart_rows = sorted(chart_rows, key=lambda row: row.summary.resets_at)
+        rolling_window = TREND_ROLLING.get(metric, 5)
+        unit, _units = TREND_UNITS.get(metric, ("window", "windows"))
+        title_suffix = f"{rolling_window}-{unit} rolling average"
+
+        current_chart_rows = [
+            row for row in counted if row.segment == report.current_segment
+        ]
+        if any(row.dollars_per_point is not None for row in current_chart_rows):
             points = [
-                (r.summary.resets_at, r.dollars_per_point, window_label(r.summary.window_start, r.summary.resets_at))
-                for r in recent if r.dollars_per_point is not None
+                (
+                    r.summary.resets_at,
+                    r.dollars_per_point,
+                    window_label(r.summary.window_start, r.summary.resets_at),
+                    r.segment,
+                )
+                for r in chart_rows
+                if r.dollars_per_point is not None
             ]
-            self.trend_chart.set_data(points, report.dollars_baseline.median, changes, format_cost, "Cost per 1%")
+            rolling = rolling_average_points(chart_rows, rolling_window, dollars=True)
+            baseline_average = report.dollars_baseline.average
+            current_average = report.recent_dollars_per_point
+            baseline_line_rows = [
+                row for row in report.baseline_rows if row.dollars_per_point is not None
+            ]
+            recent_line_rows = [
+                row for row in report.recent_rows if row.dollars_per_point is not None
+            ]
+            formatter = format_cost
+            title = f"Cost per 1% · {title_suffix}"
         else:
             points = [
-                (r.summary.resets_at, r.output_per_point, window_label(r.summary.window_start, r.summary.resets_at))
-                for r in recent if r.output_per_point is not None
+                (
+                    r.summary.resets_at,
+                    r.output_per_point,
+                    window_label(r.summary.window_start, r.summary.resets_at),
+                    r.segment,
+                )
+                for r in chart_rows
+                if r.output_per_point is not None
             ]
-            self.trend_chart.set_data(points, report.output_baseline.median, changes, format_tokens, "Output per 1%")
+            rolling = rolling_average_points(chart_rows, rolling_window, dollars=False)
+            baseline_average = report.output_baseline.average
+            current_average = report.recent_output_per_point
+            baseline_line_rows = [
+                row for row in report.baseline_rows if row.output_per_point is not None
+            ]
+            recent_line_rows = [
+                row for row in report.recent_rows if row.output_per_point is not None
+            ]
+            formatter = format_tokens
+            title = f"Output per 1% · {title_suffix}"
+
+        average_lines = []
+        if show_compare and baseline_average is not None and current_average is not None and points:
+            def line_span(rows):
+                starts = [row.summary.resets_at for row in rows]
+                if not starts:
+                    return None
+                start, end = min(starts), max(starts)
+                if start == end:
+                    start = rows[0].summary.window_start
+                return start, end
+
+            baseline_span = line_span(baseline_line_rows)
+            recent_span = line_span(recent_line_rows)
+            baseline_label = "before avg" if report.baseline_before_change else "earlier avg"
+            if baseline_span:
+                average_lines.append(
+                    (*baseline_span, baseline_average, baseline_label, MUTED)
+                )
+            if recent_span:
+                average_lines.append(
+                    (*recent_span, current_average, "recent avg", "#60a5fa")
+                )
+        self.trend_chart.set_data(
+            points,
+            None,
+            changes,
+            formatter,
+            title,
+            rolling=rolling,
+            average_lines=average_lines,
+            current_segment=report.current_segment,
+            focus_trend=not show_compare,
+        )
 
         shown = counted if self._trend_show_all else counted[:TREND_RECENT_ROWS]
-        typical_cost = report.dollars_baseline.median
-        typical_output = report.output_baseline.median
+        typical_cost = report.dollars_baseline.average
+        typical_output = report.output_baseline.average
         if not shown:
             _placeholder(table, f"No compared {units} yet.")
         else:
@@ -1293,6 +1770,12 @@ class UsageCostTab(QWidget):
                             item.setToolTip(row.dollars_reason)
                     elif column == 5 and row.cost.has_unpriced:
                         item.setToolTip(unpriced_note(row.cost))
+                    elif (
+                        column == 7
+                        and row.top_model
+                        and display_model_name(row.top_model) != row.top_model
+                    ):
+                        item.setToolTip(row.top_model)
                     table.setItem(index, column, item)
         _fit(table)
         self.trend_show_all_btn.setHidden(len(counted) <= TREND_RECENT_ROWS)
