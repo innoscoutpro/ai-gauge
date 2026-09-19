@@ -20,8 +20,10 @@ from aigauge.local_usage.usage_tab import (
     UNAVAILABLE,
     UsageCostTab,
     _Bar,
+    average_cost_per_million,
     display_model_name,
     format_tokens,
+    token_volume,
     unpriced_note,
 )
 from aigauge.local_usage.windows import (
@@ -192,7 +194,7 @@ def test_fable_card_counts_only_fable_models(qtbot, service):
     assert tab.card_text("Weekly", "cost") == "$50.03"
 
 
-def test_model_table_leads_with_cost_and_share(qtbot, service):
+def test_model_table_keeps_cost_and_replaces_output_with_token_volume(qtbot, service):
     service.run_sync()
     tab = _tab(qtbot, service, snapshot=_claude_snapshot())
 
@@ -200,15 +202,35 @@ def test_model_table_leads_with_cost_and_share(qtbot, service):
     assert [r[0] for r in rows] == ["● Opus 5", "● Sonnet 5", "Total"]
     assert tab.model_table.item(0, 0).toolTip() == "claude-opus-5"
     assert [tab.model_table.horizontalHeaderItem(i).text() for i in range(6)] == [
-        "Model", "Est. cost", "Share of cost", "Output", "Share of output", "Msgs",
+        "Model", "Est. cost", "Share of cost", "Token volume", "Avg. $/MTok", "Msgs",
     ]
     assert not tab.model_table.horizontalHeader().stretchLastSection()
-    # opus 936 of 1136 output tokens
-    assert rows[0][4] == "82%"
+    # The three Opus messages contain 1,721 non-overlapping tokens in total.
+    assert rows[0][1] == "$0.03"
+    assert rows[0][3] == "1.7K"
+    assert rows[0][4] == "$14.59"
     assert rows[0][5] == "3"
     assert rows[-1][5] == "4"
     share = tab.model_table.cellWidget(0, 2)
     assert isinstance(share, _Bar) and share.label.endswith("%")
+    tip = tab.model_table.item(0, 3).toolTip()
+    assert "Total token volume: 1.7K" in tip
+    assert "Cache reads:" in tip
+    assert "Blended API rate:" in tip
+    assert "not counted twice" in tip
+    rate_tip = tab.model_table.item(0, 4).toolTip()
+    assert "Estimated cost divided by total token volume" in rate_tip
+    assert "Cache reads:" in rate_tip
+
+
+def test_token_volume_counts_each_category_once():
+    tokens = TokenCounts(
+        input=10, output=20, cache_read=30,
+        cache_write_5m=40, cache_write_1h=50, reasoning=12,
+    )
+    assert token_volume(tokens) == 150
+    assert average_cost_per_million(3.0, tokens) == 20_000
+    assert average_cost_per_million(None, tokens) is None
 
 
 def test_token_details_are_hidden_until_asked(qtbot, service):
@@ -256,10 +278,12 @@ def test_unpriced_models_use_clear_names_and_keep_total_readable(qtbot, service)
     rows = _model_rows(tab)
     assert [r[0] for r in rows][-2:] == ["● Unidentified", "Total"]
     assert rows[-2][1] == "price unavailable"
+    assert rows[-2][3] != "price unavailable"
+    assert rows[-2][4] == "price unavailable"
     assert "+ unpriced" not in rows[-1][1]
     assert rows[-1][1].startswith("$")
-    total_cost = tab.model_table.item(tab.model_table.rowCount() - 1, 1)
-    assert total_cost.toolTip().startswith("Excludes unidentified usage (")
+    total_volume = tab.model_table.item(tab.model_table.rowCount() - 1, 3)
+    assert "Excludes unidentified usage (" in total_volume.toolTip()
 
 
 def test_internal_codex_review_model_has_a_friendly_exclusion_note():

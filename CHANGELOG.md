@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.2 - 2026-09-18
+
+### Changed
+
+- Made the **By model** table explain both sides of local usage: API-equivalent cost and the underlying token volume. The former output-only columns now show total non-overlapping tokens across uncached input, cache reads, cache writes and output, plus the blended average cost per million tokens. Hover details break out each token category and clarify that repeated cache reads count each time while reasoning tokens are already included in output.
+
 ## 0.8.1 - 2026-09-17
 
 ### Changed

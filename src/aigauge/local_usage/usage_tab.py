@@ -121,9 +121,10 @@ MODEL_COLUMNS = (
     ("model", "Model", False),
     ("cost", "Est. cost", False),
     ("share", "Share of cost", False),
-    ("output", "Output", False),
-    ("output_share", "Share of output", False),
+    ("volume", "Token volume", False),
+    ("average_rate", "Avg. $/MTok", False),
     ("messages", "Msgs", False),
+    ("output", "Output", True),
     ("input", "Input", True),
     ("cache_read", "Cache read", True),
     ("cache_write", "Cache write", True),
@@ -236,6 +237,58 @@ def format_tokens(value: float | None) -> str:
     if value < 1_000_000_000:
         return f"{value / 1_000_000:.1f}M"
     return f"{value / 1_000_000_000:.1f}B"
+
+
+def token_volume(tokens: TokenCounts) -> int:
+    """Non-overlapping prompt-side and output tokens recorded in the logs."""
+    return tokens.total_input() + tokens.output
+
+
+def average_cost_per_million(cost: float | None, tokens: TokenCounts) -> float | None:
+    """Blended API-equivalent dollars per million recorded tokens."""
+    total = token_volume(tokens)
+    if cost is None or total <= 0:
+        return None
+    return cost * 1_000_000 / total
+
+
+def token_volume_tooltip(
+    tokens: TokenCounts, *, cost: float | None = None, exclusion: str = ""
+) -> str:
+    """Explain total token volume and the categories that make it up."""
+    grouped = {
+        "Cache reads": tokens.cache_read,
+        "Cache writes": tokens.cache_write_5m + tokens.cache_write_1h,
+        "Output": tokens.output,
+        "Uncached input": tokens.input,
+    }
+    total = sum(grouped.values())
+    lines = [
+        f"Total token volume: {format_tokens(total)}",
+        "Sum across requests; repeated cache reads count each time they are used.",
+    ]
+    if total > 0:
+        for label, count in grouped.items():
+            share = 100 * count / total
+            share_text = "<1%" if 0 < share < 1 else f"{share:.0f}%"
+            lines.append(f"{label}: {format_tokens(count)} ({share_text})")
+        if cost is not None:
+            lines.append(f"Blended API rate: {format_cost(cost * 1_000_000 / total)} per 1M tokens")
+    lines.append("Reasoning tokens are already included in output and are not counted twice.")
+    if exclusion:
+        lines.append(exclusion)
+    return "\n".join(lines)
+
+
+def average_rate_tooltip(
+    tokens: TokenCounts, *, cost: float | None = None, exclusion: str = ""
+) -> str:
+    """Explain why the blended per-token rate varies between rows."""
+    prefix = (
+        "Estimated cost divided by total token volume. The average varies with "
+        "the token mix."
+    )
+    return f"{prefix}\n{token_volume_tooltip(tokens, cost=cost, exclusion=exclusion)}"
 
 
 def format_ballpark_cost(value: float | None) -> str:
@@ -1005,7 +1058,9 @@ class UsageCostTab(QWidget):
         row = QHBoxLayout()
         row.addStretch(1)
         self.token_details_cb = QCheckBox("Token details")
-        self.token_details_cb.setToolTip("Show input, cache, reasoning and subagent columns")
+        self.token_details_cb.setToolTip(
+            "Show estimated cost, raw token categories, reasoning and subagent columns"
+        )
         self.token_details_cb.toggled.connect(self._on_token_details)
         row.addWidget(self.token_details_cb)
         layout.addLayout(row)
@@ -1335,15 +1390,17 @@ class UsageCostTab(QWidget):
                 format_cost(model_row.cost)
                 if model_row.cost is not None else "price unavailable"
             )
+            priced_cost = None if model_row.has_unpriced else model_row.cost
+            average_rate = average_cost_per_million(priced_cost, tokens)
             values = {
                 "model": (f"● {display_model_name(model_row.model)}", False, color),
+                "volume": (format_tokens(token_volume(tokens)), True, None),
+                "average_rate": (
+                    format_cost(average_rate) if average_rate is not None else "price unavailable",
+                    True, TEXT if average_rate is not None else DIM,
+                ),
                 "cost": (cost_text, True, TEXT if model_row.cost is not None else DIM),
                 "output": (format_tokens(tokens.output), True, None),
-                "output_share": (
-                    f"{100 * tokens.output / summary.tokens.output:.0f}%"
-                    if summary.tokens.output else "n/a",
-                    True, None,
-                ),
                 "messages": (f"{model_row.messages:,}", True, None),
                 "input": (format_tokens(tokens.input), True, None),
                 "cache_read": (format_tokens(tokens.cache_read), True, None),
@@ -1361,6 +1418,22 @@ class UsageCostTab(QWidget):
                     and display_model_name(model_row.model) != model_row.model
                 ):
                     item.setToolTip(model_row.model)
+                elif col_key == "volume":
+                    exclusion = unpriced_note(summary) if model_row.has_unpriced else ""
+                    item.setToolTip(
+                        token_volume_tooltip(
+                            tokens,
+                            cost=None if model_row.has_unpriced else model_row.cost,
+                            exclusion=exclusion,
+                        )
+                    )
+                elif col_key == "average_rate":
+                    exclusion = unpriced_note(summary) if model_row.has_unpriced else ""
+                    item.setToolTip(
+                        average_rate_tooltip(
+                            tokens, cost=priced_cost, exclusion=exclusion
+                        )
+                    )
                 table.setItem(row, _COLUMN_INDEX[col_key], item)
             share = summary.share(model_row)
             if share is None:
@@ -1369,8 +1442,16 @@ class UsageCostTab(QWidget):
                 table.setCellWidget(row, share_column, _Bar([(share, color)], f"{share * 100:.0f}%"))
         total = len(summary.rows)
         tokens = summary.tokens
+        total_priced_cost = None if summary.has_unpriced else summary.priced_cost
+        total_average_rate = average_cost_per_million(total_priced_cost, tokens)
         totals = {
             "model": ("Total", False),
+            "volume": (format_tokens(token_volume(tokens)), True),
+            "average_rate": (
+                format_cost(total_average_rate)
+                if total_average_rate is not None else "price unavailable",
+                True,
+            ),
             "cost": (format_total_cost(summary), True),
             "output": (format_tokens(tokens.output), True),
             "messages": (f"{summary.messages:,}", True),
@@ -1383,6 +1464,22 @@ class UsageCostTab(QWidget):
             item = _item(text, right=right, bold=True)
             if col_key == "cost" and summary.has_unpriced:
                 item.setToolTip(unpriced_note(summary))
+            elif col_key == "volume":
+                exclusion = unpriced_note(summary) if summary.has_unpriced else ""
+                item.setToolTip(
+                    token_volume_tooltip(
+                        tokens,
+                        cost=None if summary.has_unpriced else summary.priced_cost,
+                        exclusion=exclusion,
+                    )
+                )
+            elif col_key == "average_rate":
+                exclusion = unpriced_note(summary) if summary.has_unpriced else ""
+                item.setToolTip(
+                    average_rate_tooltip(
+                        tokens, cost=total_priced_cost, exclusion=exclusion
+                    )
+                )
             table.setItem(total, _COLUMN_INDEX[col_key], item)
         self._on_token_details(self.token_details_cb.isChecked(), refit=False)
         _fit(table, {share_column: 170})
