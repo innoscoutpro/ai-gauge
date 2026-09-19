@@ -382,6 +382,74 @@ def test_ratio_label_shows_when_ok_and_confident(qtbot):
     assert "sessions/week" in label.toolTip()
 
 
+def test_claude_weekly_limit_hit_replaces_ratio_with_explicit_status(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    fetched = datetime(2026, 9, 19, 12, 0)
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="claude",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric(
+                    "Session",
+                    5.0,
+                    note="Paused until your week resets",
+                    window=timedelta(hours=5),
+                ),
+                UsageMetric(
+                    "Weekly",
+                    100.0,
+                    fetched + timedelta(days=2),
+                    window=timedelta(days=7),
+                ),
+                UsageMetric(
+                    "Fable",
+                    69.0,
+                    fetched + timedelta(days=2),
+                    window=timedelta(days=7),
+                ),
+            ],
+            fetched_at=fetched,
+        ),
+        "Claude",
+    )
+    widget.set_ratio("claude", _estimate(True, 8.8), recent=[8.8])
+
+    tile = widget._tiles["claude"]  # noqa: SLF001
+    assert tile.status.text() == "limit hit"
+    assert "#ef4444" in tile.status.styleSheet()
+    assert "weekly plan limit is fully used" in tile.status.toolTip().lower()
+    assert "paused until your week resets" in tile.status.toolTip().lower()
+    assert tile.ratio_label.isHidden()
+
+
+def test_independent_or_non_claude_limits_do_not_mark_provider_limit_hit(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    fetched = datetime(2026, 9, 19, 12, 0)
+    for provider, metrics in (
+        (
+            "claude",
+            [
+                UsageMetric("Weekly", 69.0),
+                UsageMetric("Fable", 100.0),
+            ],
+        ),
+        ("codex", [UsageMetric("Weekly", 100.0)]),
+    ):
+        widget.update_snapshot(
+            UsageSnapshot(
+                provider=provider,
+                status=SnapshotStatus.OK,
+                metrics=metrics,
+                fetched_at=fetched,
+            ),
+            provider.title(),
+        )
+        assert widget._tiles[provider].status.text() == ""  # noqa: SLF001
+
+
 def test_ratio_label_calibrating_placeholder(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)

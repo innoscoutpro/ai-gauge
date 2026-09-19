@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.3 - 2026-09-19
+
+### Changed
+
+- Made session and weekly trend history complete without weakening comparisons. Total estimated cost is now visible by default; capped windows and the current partial window remain visible and labeled in the table and chart, while rolling averages and before/after comparisons continue to use only completed comparable windows.
+- Made a fully used Claude weekly allowance explicit: the provider header now shows **limit hit** until reset instead of leaving the state implicit in a 100% bar or showing a burn-rate estimate that is no longer actionable.
+
 ## 0.8.2 - 2026-09-18
 
 ### Changed

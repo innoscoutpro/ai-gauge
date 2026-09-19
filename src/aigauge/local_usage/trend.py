@@ -60,6 +60,7 @@ REASON_TIME = "clock changed during the window"
 REASON_PERIOD = "different account, folder or plan"
 REASON_SPANS_CHANGE = "spans a limit change"
 REASON_UNPRICED = "some models have no price"
+REASON_IN_PROGRESS = "in progress"
 NOTE_PARTIAL_PRICE = "cost excludes unpriced models"
 
 
@@ -248,17 +249,30 @@ def build_trend(
     recent_windows: int = 1,
     baseline_windows: int = BASELINE_MAX_WINDOWS,
 ) -> TrendReport:
+    matching = sorted(
+        (s for s in summaries if s.metric == metric),
+        key=lambda s: s.resets_at,
+        reverse=True,
+    )
     completed = sorted(
-        (s for s in summaries if s.closed and s.metric == metric),
+        (s for s in matching if s.closed),
         key=lambda s: s.resets_at,
         reverse=True,
     )
     changes = sorted(limit_changes)
-    # The newest completed window defines the comparison period in force, and
-    # the limit changes before its end define the segment being compared.
-    period_id = completed[0].period_id if completed else None
-    current_segment = _segment(changes, completed[0].resets_at) if completed else len(changes)
+    # The newest window defines the account/plan and marked-change segment now
+    # in force. Open windows are displayed for context but never compared.
+    reference = matching[0] if matching else None
+    period_id = reference.period_id if reference else None
+    current_segment = _segment(changes, reference.resets_at) if reference else len(changes)
     rows = [build_row(s, rates, period_id, changes) for s in completed]
+    for summary in matching:
+        if summary.closed:
+            continue
+        row = build_row(summary, rates, period_id, changes)
+        row.reason = REASON_IN_PROGRESS
+        rows.append(row)
+    rows.sort(key=lambda row: row.summary.resets_at, reverse=True)
     counted = [row for row in rows if row.counted]
     current_rows = [row for row in counted if row.segment == current_segment]
     recent_windows = max(1, recent_windows)

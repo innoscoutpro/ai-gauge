@@ -1,5 +1,5 @@
 import shutil
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -51,6 +51,7 @@ def _save(
     model="claude-sonnet-5",
     metric="Session",
     output=1_000_000,
+    closed=True,
 ):
     resets = datetime(2026, 9, 1, tzinfo=UTC) + timedelta(hours=5 * index)
     save_summary(
@@ -66,7 +67,7 @@ def _save(
             origin="live",
             flags=set(flags),
             period_id="p1",
-            closed=True,
+            closed=closed,
         ),
     )
 
@@ -135,15 +136,16 @@ def test_default_table_keeps_comparison_column_out_of_the_way(qtbot, service):
     tab = _tab(qtbot, service)
 
     table = tab.trend_table
-    assert [table.horizontalHeaderItem(i).text() for i in range(5)] == [
-        "Window", "Used", "Cost per 1%", "Output per 1%", "vs baseline",
+    assert [table.horizontalHeaderItem(i).text() for i in range(6)] == [
+        "Window", "Used", "Est. cost", "Cost per 1%", "Output per 1%", "vs baseline",
     ]
     assert _column(table, 1) == ["10%"] * 5 + ["20%"] * 3
-    assert _column(table, 4)[0] == "+100%"
-    assert table.isColumnHidden(4)
+    assert _column(table, 2) == ["$10.00"] * 8
+    assert _column(table, 5)[0] == "+100%"
     assert table.isColumnHidden(5)
+    assert table.isColumnHidden(6)
     tab.trend_details_cb.setChecked(True)
-    assert not tab.trend_table.isColumnHidden(5)
+    assert not tab.trend_table.isColumnHidden(6)
 
 
 def test_skipped_windows_fold_into_one_line(qtbot, service):
@@ -158,16 +160,36 @@ def test_skipped_windows_fold_into_one_line(qtbot, service):
         "    ·    ~50K output / 1%"
     )
     assert tab.trend_skipped_btn.text() == (
-        "▸ 2 windows not compared (too little used 1 · limit reached 1)"
+        "▸ 1 window not compared (too little used 1)"
     )
-    assert _column(tab.trend_table, 1) == ["20%"]
+    assert _column(tab.trend_table, 1) == ["100%", "20%"]
+    assert "limit reached" in _column(tab.trend_table, 0)[0]
+    assert _column(tab.trend_table, 2) == ["$10.00", "$10.00"]
     assert tab.trend_skipped_table.isHidden()
     tab.trend_skipped_btn.click()
     assert not tab.trend_skipped_table.isHidden()
     assert _column(tab.trend_skipped_table, 2) == [
         "too little of the limit used to compare",
-        "limit reached (extra usage possible)",
     ]
+
+
+def test_partial_week_is_visible_but_not_compared(qtbot, service):
+    _save(service, 0, 20, metric="Weekly")
+    _save(service, 2, 45, metric="Weekly", closed=False)
+    tab = _tab(qtbot, service)
+
+    tab.set_trend_metric("Weekly")
+    tab.set_limit_changes([date(2026, 9, 1)])
+
+    assert tab.trend_headline_label.text() == (
+        "Current week in progress    ·    45% used    ·    $10.00 API-equiv."
+    )
+    assert _column(tab.trend_table, 1) == ["45%", "20%"]
+    assert "in progress" in _column(tab.trend_table, 0)[0]
+    assert _column(tab.trend_table, 2) == ["$10.00", "$10.00"]
+    assert len(tab.trend_chart._points) == 2
+    assert len(tab.trend_chart._rolling[0]) == 1
+    assert "excluded from comparisons" in tab.trend_table.item(0, 0).toolTip()
 
 
 def test_only_recent_windows_until_show_all(qtbot, service):
@@ -293,7 +315,7 @@ def test_marking_a_limit_change_keeps_and_compares_older_data(qtbot, service):
 
     assert not tab.trend_answer.isHidden()
     assert tab.trend_headline_label.isHidden()
-    assert not tab.trend_table.isColumnHidden(4)
+    assert not tab.trend_table.isColumnHidden(5)
     assert {point[3] for point in tab.trend_chart._points} == {0, 1}
     assert len(tab.trend_chart._rolling) == 2
     assert {line[3] for line in tab.trend_chart._average_lines} == {

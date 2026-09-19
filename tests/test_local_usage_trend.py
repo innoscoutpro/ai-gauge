@@ -140,13 +140,15 @@ def test_rate_table_changes_do_not_change_exclusions(rates, tmp_path):
     assert before.current.dollars_per_point != after.current.dollars_per_point
 
 
-def test_open_windows_and_other_metrics_are_ignored(rates):
+def test_open_windows_are_display_only_and_other_metrics_are_ignored(rates):
     report = build_trend(
         [_window(1, 20, closed=False), _window(2, 20, metric="Weekly")], "Session", rates
     )
 
-    assert report.rows == []
+    assert len(report.rows) == 1
+    assert report.rows[0].reason == "in progress"
     assert report.current is None
+    assert report.recent_rows == []
 
 
 def test_cache_share_and_top_model_are_reported(rates):

@@ -126,6 +126,53 @@ def _provider_sort_key(provider: str) -> tuple[int, str]:
         return (len(PROVIDER_ORDER), provider)
 
 
+def _claude_weekly_limit_hit(snapshot: UsageSnapshot | None) -> bool:
+    """Return whether Claude's primary weekly allowance is fully used.
+
+    Fable has an independent weekly allowance, so only the primary ``Weekly``
+    metric should put the whole Claude tile into the limit-hit state.
+    """
+    if (
+        snapshot is None
+        or snapshot.status != SnapshotStatus.OK
+        or _provider_family(snapshot.provider) != "claude"
+    ):
+        return False
+    return any(
+        metric.label.strip().lower() == "weekly"
+        and metric.percent_used is not None
+        and metric.percent_used >= 100.0
+        for metric in snapshot.metrics
+    )
+
+
+def _claude_limit_hit_tooltip(snapshot: UsageSnapshot) -> str:
+    lines = ["Claude's weekly plan limit is fully used."]
+    session = next(
+        (
+            metric
+            for metric in snapshot.metrics
+            if metric.label.strip().lower() == "session"
+        ),
+        None,
+    )
+    weekly = next(
+        (
+            metric
+            for metric in snapshot.metrics
+            if metric.label.strip().lower() == "weekly"
+        ),
+        None,
+    )
+    if session is not None and session.note:
+        lines.append(session.note.rstrip(".") + ".")
+    if weekly is not None and weekly.resets_at is not None:
+        reset = weekly.resets_at.strftime("%Y-%m-%d %H:%M")
+        relative = _format_relative(weekly.resets_at)
+        lines.append(f"Weekly reset: {reset}" + (f" ({relative})." if relative else "."))
+    return "\n".join(lines)
+
+
 def _format_relative(dt: datetime | None) -> str:
     if dt is None:
         return ""
@@ -1278,12 +1325,22 @@ class _ProviderTile(QFrame):
             )
             return
 
-        # OK
-        self.status.setText("")
+        # OK. A fully used Claude weekly allowance is still a successful
+        # snapshot, but it is an important provider state rather than merely a
+        # red progress bar. Surface it in the header until the reset arrives.
+        limit_hit = _claude_weekly_limit_hit(snapshot)
+        self.status.setText("limit hit" if limit_hit else "")
         self.status.setStyleSheet(
-            "color: #9ca3af; font-size: 10px; font-style: normal;"
+            (
+                "color: #ef4444; font-size: 10px; font-style: normal; "
+                "font-weight: 700;"
+            )
+            if limit_hit
+            else "color: #9ca3af; font-size: 10px; font-style: normal;"
         )
-        self.status.setToolTip("")
+        self.status.setToolTip(
+            _claude_limit_hit_tooltip(snapshot) if limit_hit else ""
+        )
         self.status.setCursor(Qt.CursorShape.ArrowCursor)
         self.action_btn.setVisible(False)
         has_breakdown = any(m.tag for m in snapshot.metrics)
@@ -1295,7 +1352,7 @@ class _ProviderTile(QFrame):
         self.expand_btn.setVisible(has_breakdown or bool(compact_metrics))
         self._update_expand_btn_glyph()
         if compact_metrics and not self._expanded:
-            self.ratio_label.setVisible(False)
+            self._render_ratio_label()
             self._set_rows([])
             self._set_compact_metrics(compact_metrics)
             return
@@ -1317,6 +1374,7 @@ class _ProviderTile(QFrame):
                 for m in visible
             ]
         )
+        self._render_ratio_label()
 
     def set_ratio(
         self,
@@ -1348,6 +1406,7 @@ class _ProviderTile(QFrame):
             or snapshot is None
             or snapshot.status != SnapshotStatus.OK
             or not has_session
+            or _claude_weekly_limit_hit(snapshot)
             or (self._supports_compact_collapse() and not self._expanded)
         ):
             self.ratio_label.setVisible(False)

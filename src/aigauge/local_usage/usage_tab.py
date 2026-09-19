@@ -56,6 +56,7 @@ from .trend import (
     BASELINE_MIN_WINDOWS,
     COUNTED,
     REASON_INCOMPLETE,
+    REASON_IN_PROGRESS,
     REASON_LIMIT,
     REASON_LOW,
     REASON_NO_READING,
@@ -132,13 +133,13 @@ MODEL_COLUMNS = (
     ("sidechain", "Subagent %", True),
 )
 _COLUMN_INDEX = {key: i for i, (key, _title, _details) in enumerate(MODEL_COLUMNS)}
-# The first four columns always show; the comparison column is opt-in and the
-# remaining columns appear with "Details".
+# Cost and usage columns always show; the comparison column is opt-in and the
+# remaining mix/source columns appear with "Details".
 TREND_COLUMNS = (
-    "Window", "Used", "Cost per 1%", "Output per 1%", "vs baseline",
-    "Est. cost", "Cache share", "Top model", "Source",
+    "Window", "Used", "Est. cost", "Cost per 1%", "Output per 1%", "vs baseline",
+    "Cache share", "Top model", "Source",
 )
-TREND_BASIC_COLUMNS = 5
+TREND_BASIC_COLUMNS = 6
 TREND_RECENT_ROWS = 20
 TREND_CHART_POINTS = 60
 TREND_UNITS = {SESSION: ("session", "sessions"), WEEKLY: ("week", "weeks")}
@@ -158,10 +159,12 @@ SHORT_REASONS = {
     REASON_PERIOD: "different account or plan",
     REASON_SPANS_CHANGE: "spans a limit change",
 }
+TREND_CONTEXT_REASONS = {REASON_LIMIT, REASON_IN_PROGRESS}
 TREND_DEFINITION = (
     "Cost per 1% is what a window's usage would cost at API prices, divided by how "
     "much of the limit it used. Higher means the limit covered more. Dots are individual "
-    "windows; the solid line is a usage-weighted rolling average. This is a rough signal: "
+    "windows; capped and in-progress dots are context only. The solid line is a "
+    "usage-weighted rolling average of completed comparable windows. This is a rough signal: "
     "model choice and cache use can move it even when the provider's limit is unchanged."
 )
 
@@ -314,6 +317,29 @@ def window_label(start: datetime, end: datetime) -> str:
     return f"{start_local:%b %d} to {end_local:%b %d}"
 
 
+def trend_window_label(row: TrendRow) -> str:
+    text = window_label(row.summary.window_start, row.summary.resets_at)
+    if row.reason == REASON_IN_PROGRESS:
+        return f"{text} · in progress"
+    if row.reason == REASON_LIMIT:
+        return f"{text} · limit reached"
+    return text
+
+
+def trend_context_tooltip(row: TrendRow) -> str:
+    if row.reason == REASON_IN_PROGRESS:
+        return (
+            "Current partial window. Shown for context but excluded from comparisons "
+            "and rolling averages."
+        )
+    if row.reason == REASON_LIMIT:
+        return (
+            "This window reached the usage limit. It is shown for context but excluded "
+            "from comparisons and rolling averages because extra usage may be billed separately."
+        )
+    return ""
+
+
 def _signed_percent(change: float) -> str:
     return f"{change * 100:+.0f}%"
 
@@ -388,6 +414,17 @@ def trend_recent_text(report: TrendReport, metric: str = SESSION) -> str:
     unit, units = TREND_UNITS.get(metric, ("window", "windows"))
     count = len(report.recent_rows)
     if not count:
+        partial = next(
+            (row for row in report.rows if row.reason == REASON_IN_PROGRESS), None
+        )
+        if partial is not None:
+            values = []
+            if partial.pct is not None:
+                values.append(f"{partial.pct:.0f}% used")
+            if partial.cost.rows:
+                values.append(f"{format_total_cost(partial.cost)} API-equiv.")
+            suffix = "    ·    " + "    ·    ".join(values) if values else ""
+            return f"Current {unit} in progress{suffix}"
         return f"No completed {units} to summarize yet."
     window_text = f"{count} {units}" if count > 1 else f"latest {unit}"
     values = []
@@ -1627,7 +1664,7 @@ class UsageCostTab(QWidget):
             self.trend_detail_label.setHidden(True)
             self.trend_warning_label.setHidden(True)
             self.trend_chart.set_data([], None, [], format_cost, "")
-            table.setColumnHidden(4, True)
+            table.setColumnHidden(5, True)
             _placeholder(table, f"No compared {units} yet.")
             _fit(table)
             self.trend_show_all_btn.setHidden(True)
@@ -1702,7 +1739,7 @@ class UsageCostTab(QWidget):
             self._view != VIEW_TREND or not self._trend_compare_available
         )
         show_compare = self._trend_compare_available and self._trend_compare_change
-        table.setColumnHidden(4, not show_compare)
+        table.setColumnHidden(5, not show_compare)
         self.trend_answer.setHidden(not show_compare)
         self.trend_headline_label.setHidden(show_compare)
         self.trend_detail_label.setHidden(True)
@@ -1730,6 +1767,11 @@ class UsageCostTab(QWidget):
         self.trend_warning_label.setHidden(not (mixed or warnings))
 
         counted = [row for row in report.rows if row.counted]
+        context_rows = [row for row in report.rows if row.reason in TREND_CONTEXT_REASONS]
+        display_rows = [
+            row for row in report.rows
+            if row.counted or row.reason in TREND_CONTEXT_REASONS
+        ]
         changes = [local_day_bounds(day)[0] for day in self.limit_change_dates()]
         if show_compare and report.current_segment > 0:
             current_rows = [row for row in counted if row.segment == report.current_segment]
@@ -1739,22 +1781,25 @@ class UsageCostTab(QWidget):
                 current_rows[: TREND_CHART_POINTS - previous_count]
                 + previous_rows[:previous_count]
             )
+            for row in context_rows:
+                if row.segment in (report.current_segment, report.current_segment - 1):
+                    chart_rows.append(row)
         else:
-            chart_rows = counted[:TREND_CHART_POINTS]
+            chart_rows = display_rows[:TREND_CHART_POINTS]
         chart_rows = sorted(chart_rows, key=lambda row: row.summary.resets_at)
         rolling_window = TREND_ROLLING.get(metric, 5)
         unit, _units = TREND_UNITS.get(metric, ("window", "windows"))
         title_suffix = f"{rolling_window}-{unit} rolling average"
 
         current_chart_rows = [
-            row for row in counted if row.segment == report.current_segment
+            row for row in display_rows if row.segment == report.current_segment
         ]
         if any(row.dollars_per_point is not None for row in current_chart_rows):
             points = [
                 (
                     r.summary.resets_at,
                     r.dollars_per_point,
-                    window_label(r.summary.window_start, r.summary.resets_at),
+                    trend_window_label(r),
                     r.segment,
                 )
                 for r in chart_rows
@@ -1776,7 +1821,7 @@ class UsageCostTab(QWidget):
                 (
                     r.summary.resets_at,
                     r.output_per_point,
-                    window_label(r.summary.window_start, r.summary.resets_at),
+                    trend_window_label(r),
                     r.segment,
                 )
                 for r in chart_rows
@@ -1828,7 +1873,7 @@ class UsageCostTab(QWidget):
             focus_trend=not show_compare,
         )
 
-        shown = counted if self._trend_show_all else counted[:TREND_RECENT_ROWS]
+        shown = display_rows if self._trend_show_all else display_rows[:TREND_RECENT_ROWS]
         typical_cost = report.dollars_baseline.average
         typical_output = report.output_baseline.average
         if not shown:
@@ -1837,9 +1882,9 @@ class UsageCostTab(QWidget):
             table.setRowCount(len(shown))
             for index, row in enumerate(shown):
                 summary = row.summary
-                if row.dollars_per_point is not None and typical_cost:
+                if row.counted and row.dollars_per_point is not None and typical_cost:
                     versus = _signed_percent(row.dollars_per_point / typical_cost - 1)
-                elif row.output_per_point is not None and typical_output:
+                elif row.counted and row.output_per_point is not None and typical_output:
                     versus = _signed_percent(row.output_per_point / typical_output - 1)
                 else:
                     versus = "n/a"
@@ -1848,25 +1893,32 @@ class UsageCostTab(QWidget):
                     if row.dollars_per_point is not None else "n/a"
                 )
                 cells = (
-                    window_label(summary.window_start, summary.resets_at),
+                    trend_window_label(row),
                     f"{row.pct:.0f}%" if row.pct is not None else "n/a",
+                    format_total_cost(row.cost),
                     cost_per_point,
                     format_tokens(row.output_per_point) if row.output_per_point is not None else "n/a",
                     versus,
-                    format_total_cost(row.cost),
                     f"{100 * row.cache_share:.0f}%" if row.cache_share is not None else "n/a",
                     display_model_name(row.top_model) if row.top_model else "n/a",
                     "from history" if summary.origin == ORIGIN_BACKFILL else "tracked",
                 )
                 for column, text in enumerate(cells):
                     item = _item(text, right=column not in (0, 7, 8))
-                    if column == 2:
+                    context_tip = trend_context_tooltip(row)
+                    if column == 0 and context_tip:
+                        item.setToolTip(context_tip)
+                    elif column == 2 and row.cost.has_unpriced:
+                        item.setToolTip(unpriced_note(row.cost))
+                    elif column == 3:
                         if row.dollars_note:
                             item.setToolTip(f"* {row.dollars_note}")
                         elif row.dollars_reason != COUNTED:
                             item.setToolTip(row.dollars_reason)
-                    elif column == 5 and row.cost.has_unpriced:
-                        item.setToolTip(unpriced_note(row.cost))
+                        elif context_tip:
+                            item.setToolTip(context_tip)
+                    elif column == 4 and context_tip:
+                        item.setToolTip(context_tip)
                     elif (
                         column == 7
                         and row.top_model
@@ -1875,12 +1927,16 @@ class UsageCostTab(QWidget):
                         item.setToolTip(row.top_model)
                     table.setItem(index, column, item)
         _fit(table)
-        self.trend_show_all_btn.setHidden(len(counted) <= TREND_RECENT_ROWS)
+        self.trend_show_all_btn.setHidden(len(display_rows) <= TREND_RECENT_ROWS)
         self.trend_show_all_btn.setText(
-            f"Show recent {TREND_RECENT_ROWS}" if self._trend_show_all else f"Show all {len(counted)}"
+            f"Show recent {TREND_RECENT_ROWS}"
+            if self._trend_show_all else f"Show all {len(display_rows)}"
         )
 
-        skipped = [row for row in report.rows if not row.counted]
+        skipped = [
+            row for row in report.rows
+            if not row.counted and row.reason not in TREND_CONTEXT_REASONS
+        ]
         self.trend_skipped_btn.setHidden(not skipped)
         if skipped:
             counts = Counter(SHORT_REASONS.get(row.reason, row.reason) for row in skipped)
