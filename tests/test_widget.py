@@ -339,7 +339,6 @@ def test_browser_account_tiles_group_by_provider_kind(qtbot):
             id="opencode_go-work",
             kind="opencode_go",
             name="Work",
-            usage_url="https://opencode.ai/workspace/work/go",
         )
     )
     widget = UsageWidget(config)
@@ -669,7 +668,7 @@ def test_secondary_browser_account_auth_tile_uses_sign_in_button(qtbot):
 
 
 
-def test_opencode_go_auth_tile_uses_sign_in_button(qtbot):
+def test_opencode_go_auth_tile_uses_add_key_button(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
 
@@ -677,13 +676,13 @@ def test_opencode_go_auth_tile_uses_sign_in_button(qtbot):
         UsageSnapshot(
             provider="opencode_go",
             status=SnapshotStatus.AUTH_REQUIRED,
-            error="Not signed in.",
+            error="Add an OpenCode Go API key in Settings.",
         ),
         "OpenCode",
     )
 
     tile = widget._tiles["opencode_go"]  # noqa: SLF001
-    assert tile.action_btn.text() == "Sign in"
+    assert tile.action_btn.text() == "Add key"
     assert not tile.action_btn.isHidden()
 
 def test_sign_in_button_emits_sign_in_signal(qtbot):
@@ -789,7 +788,6 @@ def test_secondary_opencode_collapsed_tile_shows_rolling_and_monthly(qtbot):
             id="opencode_go-work",
             kind="opencode_go",
             name="Work",
-            usage_url="https://opencode.ai/workspace/work/go",
         )
     )
     widget = UsageWidget(config)

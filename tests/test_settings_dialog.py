@@ -100,54 +100,135 @@ def test_mcp_integration_defaults_off_and_gates_policies(qtbot, monkeypatch):
 
 
 
-def test_opencode_go_sign_in_button_emits_sign_in_signal(qtbot):
+def test_opencode_go_uses_masked_api_key_field_instead_of_browser_buttons(
+    qtbot, monkeypatch
+):
+    monkeypatch.setattr(settings_dialog, "get_opencode_go_key", lambda account_id: None)
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
 
-    with qtbot.waitSignal(dialog.sign_in_clicked) as signal:
-        _button(dialog, "opencode_go_signin_btn").click()
-
-    assert signal.args == ["opencode_go"]
-
-
-def test_opencode_go_paste_cookie_button_emits_signal(qtbot):
-    dialog = SettingsDialog(Config())
-    qtbot.addWidget(dialog)
-
-    with qtbot.waitSignal(dialog.paste_cookie_clicked) as signal:
-        _button(dialog, "opencode_go_paste_cookie_btn").click()
-
-    assert signal.args == ["opencode_go"]
-
-
-def test_opencode_go_clear_sign_in_button_emits_signal(qtbot):
-    dialog = SettingsDialog(Config())
-    qtbot.addWidget(dialog)
-
-    with qtbot.waitSignal(dialog.clear_sign_in_clicked) as signal:
-        _button(dialog, "opencode_go_clear_signin_btn").click()
-
-    assert signal.args == ["opencode_go"]
-
-
-def test_opencode_go_open_usage_button_launches_configured_url(qtbot, monkeypatch):
-    opened = []
-    monkeypatch.setattr(
-        settings_dialog, "_open_in_browser", lambda url: opened.append(url)
+    row = next(
+        row
+        for row in dialog._browser_account_rows  # noqa: SLF001
+        if row.account_id == "opencode_go"
     )
+    assert row.api_key_edit is not None
+    assert row.api_key_edit.echoMode() == row.api_key_edit.EchoMode.Password
+    assert dialog.findChild(QPushButton, "opencode_go_signin_btn") is None
+    assert dialog.findChild(QPushButton, "opencode_go_paste_cookie_btn") is None
 
-    config = Config()
-    account = next(a for a in config.browser_accounts if a.id == "opencode_go")
-    account.usage_url = "https://opencode.ai/workspace/test/go"
-    dialog = SettingsDialog(config)
+
+def test_opencode_go_accept_saves_key_to_account_secret(qtbot, monkeypatch):
+    secrets = {}
+    monkeypatch.setattr(
+        settings_dialog,
+        "get_opencode_go_key",
+        lambda account_id: secrets.get(account_id),
+    )
+    monkeypatch.setattr(
+        settings_dialog,
+        "set_opencode_go_key",
+        lambda account_id, value: (
+            secrets.__setitem__(account_id, value)
+            if value
+            else secrets.pop(account_id, None)
+        ),
+    )
+    dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
-    _button(dialog, "opencode_go_open_usage_btn").click()
+    row = next(
+        row
+        for row in dialog._browser_account_rows  # noqa: SLF001
+        if row.account_id == "opencode_go"
+    )
+    row.api_key_edit.setText("oc_sk_test")
 
-    assert opened == ["https://opencode.ai/workspace/test/go"]
+    dialog._accept()  # noqa: SLF001
+
+    assert secrets == {"opencode_go": "oc_sk_test"}
+
+
+def test_opencode_go_existing_key_can_be_cleared(qtbot, monkeypatch):
+    secrets = {"opencode_go": "saved-key"}
+    monkeypatch.setattr(
+        settings_dialog,
+        "get_opencode_go_key",
+        lambda account_id: secrets.get(account_id),
+    )
+    monkeypatch.setattr(
+        settings_dialog,
+        "set_opencode_go_key",
+        lambda account_id, value: (
+            secrets.__setitem__(account_id, value)
+            if value
+            else secrets.pop(account_id, None)
+        ),
+    )
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    row = next(
+        row
+        for row in dialog._browser_account_rows  # noqa: SLF001
+        if row.account_id == "opencode_go"
+    )
+    assert row.clear_api_key_cb is not None
+    assert not row.clear_api_key_cb.isHidden()
+    row.clear_api_key_cb.setChecked(True)
+
+    dialog._accept()  # noqa: SLF001
+
+    assert secrets == {}
+
+
+def test_opencode_go_key_draft_survives_adding_an_account(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "get_opencode_go_key", lambda account_id: None)
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    first_row = next(
+        row
+        for row in dialog._browser_account_rows  # noqa: SLF001
+        if row.account_id == "opencode_go"
+    )
+    first_row.api_key_edit.setText("oc_sk_unsaved")
+
+    dialog._add_browser_account("opencode_go")  # noqa: SLF001
+
+    rebuilt_first_row = next(
+        row
+        for row in dialog._browser_account_rows  # noqa: SLF001
+        if row.account_id == "opencode_go"
+    )
+    assert rebuilt_first_row.api_key_edit.text() == "oc_sk_unsaved"
+
+
+def test_removing_opencode_account_clears_its_key_on_accept(qtbot, monkeypatch):
+    secrets = {"opencode_go": "saved-key"}
+    monkeypatch.setattr(
+        settings_dialog,
+        "get_opencode_go_key",
+        lambda account_id: secrets.get(account_id),
+    )
+    monkeypatch.setattr(
+        settings_dialog,
+        "set_opencode_go_key",
+        lambda account_id, value: (
+            secrets.__setitem__(account_id, value)
+            if value
+            else secrets.pop(account_id, None)
+        ),
+    )
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    dialog._remove_browser_account("opencode_go")  # noqa: SLF001
+    dialog._accept()  # noqa: SLF001
+
+    assert secrets == {}
 
 
 def test_opencode_go_settings_apply_multiple_accounts(qtbot, monkeypatch):
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    monkeypatch.setattr(settings_dialog, "get_opencode_go_key", lambda account_id: None)
     config = Config()
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
@@ -158,7 +239,6 @@ def test_opencode_go_settings_apply_multiple_accounts(qtbot, monkeypatch):
         for row in dialog._browser_account_rows  # noqa: SLF001
         if row.account_id == "opencode_go"
     )
-    first_row.usage_url_edit.setText("https://opencode.ai/workspace/personal/go")
     dialog._add_browser_account("opencode_go")  # noqa: SLF001
     second_row = next(
         row
@@ -166,7 +246,6 @@ def test_opencode_go_settings_apply_multiple_accounts(qtbot, monkeypatch):
         if row.account_id.startswith("opencode_go-")
     )
     second_row.name_edit.setText("Work")
-    second_row.usage_url_edit.setText("https://opencode.ai/workspace/work/go")
     second_row.colors = ColorThresholds(
         green_max=20,
         yellow_max=50,
@@ -176,12 +255,8 @@ def test_opencode_go_settings_apply_multiple_accounts(qtbot, monkeypatch):
 
     accounts = [a for a in config.browser_accounts if a.kind == "opencode_go"]
     assert config.providers.opencode_go is True
-    assert [(a.name, a.usage_url) for a in accounts] == [
-        (None, "https://opencode.ai/workspace/personal/go"),
-        ("Work", "https://opencode.ai/workspace/work/go"),
-    ]
+    assert [a.name for a in accounts] == [None, "Work"]
     assert accounts[1].colors.green_max == 20
-    assert config.opencode_go.usage_url == accounts[0].usage_url
 
 def test_add_codex_account_creates_named_secondary_row(qtbot, monkeypatch):
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)

@@ -1259,7 +1259,8 @@ class _ProviderTile(QFrame):
             return
 
         if snapshot.status == SnapshotStatus.AUTH_REQUIRED:
-            self.status.setText("not signed in")
+            is_opencode = _provider_family(self.provider) == "opencode_go"
+            self.status.setText("API key needed" if is_opencode else "not signed in")
             self.status.setStyleSheet(
                 "color: #f59e0b; font-size: 10px; font-style: normal;"
             )
@@ -1268,6 +1269,7 @@ class _ProviderTile(QFrame):
             self.action_btn.setVisible(
                 _provider_family(self.provider) in ("claude", "codex", "opencode_go")
             )
+            self.action_btn.setText("Add key" if is_opencode else "Sign in")
             self.expand_btn.setVisible(False)
             self.ratio_label.setVisible(False)
             self._hide_compact_metrics()
@@ -2347,7 +2349,12 @@ class UsageWidget(QWidget):
         if snapshot is None:
             return f"{display} --"
         if snapshot.status == SnapshotStatus.AUTH_REQUIRED:
-            return f"{display} sign in"
+            suffix = (
+                "add key"
+                if _provider_family(provider) == "opencode_go"
+                else "sign in"
+            )
+            return f"{display} {suffix}"
         if snapshot.status == SnapshotStatus.ERROR:
             metric = next(
                 (m for m in snapshot.metrics if m.label.lower() == "session"),
@@ -2436,8 +2443,11 @@ class UsageWidget(QWidget):
         if snapshot is None:
             tooltip = "Waiting for first refresh."
         elif snapshot.status == SnapshotStatus.AUTH_REQUIRED:
-            text = f"{display} sign in"
-            tooltip = snapshot.error or "Sign in required."
+            is_opencode = _provider_family(provider) == "opencode_go"
+            text = f"{display} {'add key' if is_opencode else 'sign in'}"
+            tooltip = snapshot.error or (
+                "API key required." if is_opencode else "Sign in required."
+            )
             kind = "auth"
         elif snapshot.status == SnapshotStatus.ERROR:
             metric = next(

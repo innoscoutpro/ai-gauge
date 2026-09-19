@@ -1,182 +1,194 @@
 from datetime import datetime, timedelta
 
-from aigauge.config import BrowserAccount, Config
+import requests
+import responses
+
+from aigauge.config import Config
 from aigauge.models import SnapshotStatus
-from aigauge.providers.opencode_go import _build_snapshot, _parse_reset_text, usage_url
+from aigauge.providers.opencode_go import (
+    OPENCODE_GO_USAGE_API,
+    OpenCodeGoProvider,
+    _build_snapshot,
+    _parse_reset_at,
+)
 
 
-def test_parse_reset_text_handles_days_hours_minutes():
-    parsed = _parse_reset_text("Resets in 30 days 17 hours")
-
-    assert parsed is not None
-    assert parsed > datetime.now()
-    assert 30 <= (parsed - datetime.now()).days <= 31
-
-
-def test_opencode_go_builds_three_usage_metrics_from_rows():
-    snapshot = _build_snapshot(
-        {
-            "logged_out": False,
-            "usage": [
-                {
-                    "label": "Rolling Usage",
-                    "percent": 13,
-                    "reset_text": "Resets in 4 hours 36 minutes",
-                },
-                {
-                    "label": "Weekly Usage",
-                    "percent": 14,
-                    "reset_text": "Resets in 3 days 3 hours",
-                },
-                {
-                    "label": "Monthly Usage",
-                    "percent": 7,
-                    "reset_text": "Resets in 30 days 17 hours",
-                },
-            ],
-            "title": "OpenCode",
-            "body_text": "Rolling Usage 13% Weekly Usage 14% Monthly Usage 7%",
+def _usage_payload() -> dict:
+    return {
+        "usage": {
+            "rolling": {
+                "status": "ok",
+                "percent": 13,
+                "resetsAt": "2026-09-19T20:30:00.000Z",
+            },
+            "weekly": {
+                "status": "ok",
+                "percent": 14.5,
+                "resetsAt": "2026-09-22T19:00:00.000Z",
+            },
+            "monthly": {
+                "status": "ok",
+                "percent": 7,
+                "resetsAt": "2026-10-20T12:00:00.000Z",
+            },
         }
+    }
+
+
+def _sync(provider: OpenCodeGoProvider, monkeypatch) -> None:
+    monkeypatch.setattr(
+        provider,
+        "_run_async",
+        lambda work, on_done: on_done(work()),
     )
 
+
+def test_parse_reset_at_converts_utc_to_local_naive_datetime():
+    source = "2026-09-19T20:30:00.000Z"
+
+    parsed = _parse_reset_at(source)
+
+    expected = (
+        datetime.fromisoformat(source.replace("Z", "+00:00"))
+        .astimezone()
+        .replace(tzinfo=None)
+    )
+    assert parsed == expected
+    assert parsed.tzinfo is None
+
+
+def test_build_snapshot_maps_official_api_response():
+    payload = _usage_payload()
+
+    snapshot = _build_snapshot(payload, account_id="opencode_go-work")
+
+    assert snapshot.provider == "opencode_go-work"
     assert snapshot.status == SnapshotStatus.OK
-    assert [(m.label, m.percent_used) for m in snapshot.metrics] == [
+    assert [(metric.label, metric.percent_used) for metric in snapshot.metrics] == [
         ("Rolling", 13.0),
-        ("Weekly", 14.0),
+        ("Weekly", 14.5),
         ("Monthly", 7.0),
     ]
-    assert [m.window for m in snapshot.metrics] == [
+    assert [metric.window for metric in snapshot.metrics] == [
         timedelta(hours=5),
         timedelta(days=7),
         timedelta(days=30),
     ]
-    assert all(m.resets_at is not None for m in snapshot.metrics)
+    assert all(metric.resets_at is not None for metric in snapshot.metrics)
+    assert snapshot.raw == payload
 
 
-def test_opencode_go_maps_current_five_hour_row_to_rolling_metric():
-    snapshot = _build_snapshot(
-        {
-            "logged_out": False,
-            "usage": [
-                {
-                    "label": "5-hour Usage",
-                    "percent": 4.4,
-                    "reset_text": "Resets in 4 hours 34 minutes",
-                },
-                {"label": "Weekly Usage", "percent": 1.8},
-                {"label": "Monthly Usage", "percent": 0.9},
-            ],
-            "title": "OpenCode",
-            "body_text": "5-hour Usage 4.4% Weekly Usage 1.8% Monthly Usage 0.9%",
-        }
+def test_build_snapshot_marks_rate_limited_window_full():
+    payload = _usage_payload()
+    payload["usage"]["weekly"].update(status="rate-limited", percent=84)
+
+    snapshot = _build_snapshot(payload)
+
+    weekly = snapshot.metrics[1]
+    assert weekly.percent_used == 100.0
+    assert weekly.note == "Rate limit reached."
+
+
+def test_build_snapshot_rejects_incomplete_api_response():
+    payload = _usage_payload()
+    del payload["usage"]["monthly"]
+
+    try:
+        _build_snapshot(payload)
+    except ValueError as exc:
+        assert "monthly" in str(exc)
+    else:
+        raise AssertionError("incomplete response should not be accepted")
+
+
+def test_refresh_without_key_requests_setup(monkeypatch):
+    monkeypatch.setattr(
+        "aigauge.providers.opencode_go.get_opencode_go_key",
+        lambda account_id: None,
     )
+    provider = OpenCodeGoProvider(Config(), account_id="opencode_go-work")
+    captured = []
 
-    assert snapshot.status == SnapshotStatus.OK
-    assert [(m.label, m.percent_used) for m in snapshot.metrics] == [
-        ("Rolling", 4.4),
-        ("Weekly", 1.8),
-        ("Monthly", 0.9),
-    ]
-    assert snapshot.metrics[0].window == timedelta(hours=5)
-    assert snapshot.metrics[0].resets_at is not None
+    provider.refresh(captured.append)
+
+    assert len(captured) == 1
+    assert captured[0].provider == "opencode_go-work"
+    assert captured[0].status == SnapshotStatus.AUTH_REQUIRED
+    assert "API key" in (captured[0].error or "")
 
 
-def test_opencode_go_body_text_fallback_reads_visible_usage():
-    snapshot = _build_snapshot(
-        {
-            "logged_out": False,
-            "usage": [],
-            "title": "OpenCode",
-            "body_text": (
-                "Rolling Usage 13% Resets in 4 hours 36 minutes "
-                "Weekly Usage 14% Resets in 3 days 3 hours "
-                "Monthly Usage 7% Resets in 30 days 17 hours"
-            ),
-        }
+@responses.activate
+def test_refresh_uses_bearer_key_and_returns_usage(monkeypatch):
+    monkeypatch.setattr(
+        "aigauge.providers.opencode_go.get_opencode_go_key",
+        lambda account_id: "test-key",
     )
-
-    assert snapshot.status == SnapshotStatus.OK
-    assert [m.label for m in snapshot.metrics] == ["Rolling", "Weekly", "Monthly"]
-
-
-def test_opencode_go_body_text_fallback_accepts_five_hour_usage():
-    snapshot = _build_snapshot(
-        {
-            "logged_out": False,
-            "usage": [],
-            "title": "OpenCode",
-            "body_text": (
-                "5-hour Usage 4.4% Resets in 4 hours 34 minutes "
-                "Weekly Usage 1.8% Resets in 3 days 23 hours "
-                "Monthly Usage 0.9% Resets in 29 days 20 hours"
-            ),
-        }
+    responses.add(
+        responses.GET,
+        OPENCODE_GO_USAGE_API,
+        json=_usage_payload(),
+        status=200,
     )
+    provider = OpenCodeGoProvider(Config(), account_id="opencode_go-work")
+    _sync(provider, monkeypatch)
+    captured = []
 
-    assert snapshot.status == SnapshotStatus.OK
-    assert [(m.label, m.percent_used) for m in snapshot.metrics] == [
-        ("Rolling", 4.4),
-        ("Weekly", 1.8),
-        ("Monthly", 0.9),
-    ]
+    provider.refresh(captured.append)
+
+    assert captured[0].status == SnapshotStatus.OK
+    assert responses.calls[0].request.headers["Authorization"] == "Bearer test-key"
 
 
-def test_opencode_go_logged_out_payload_is_auth_required():
-    snapshot = _build_snapshot(
-        {
-            "logged_out": True,
-            "usage": [],
-            "title": "Login",
-            "body_text": "Sign in to continue",
-        }
+@responses.activate
+def test_refresh_maps_invalid_key_to_auth_required(monkeypatch):
+    monkeypatch.setattr(
+        "aigauge.providers.opencode_go.get_opencode_go_key",
+        lambda account_id: "bad-key",
     )
+    responses.add(responses.GET, OPENCODE_GO_USAGE_API, status=401)
+    provider = OpenCodeGoProvider(Config())
+    _sync(provider, monkeypatch)
+    captured = []
 
-    assert snapshot.status == SnapshotStatus.AUTH_REQUIRED
-    assert "Not signed in" in (snapshot.error or "")
+    provider.refresh(captured.append)
+
+    assert captured[0].status == SnapshotStatus.AUTH_REQUIRED
+    assert "rejected" in (captured[0].error or "")
 
 
-def test_opencode_go_unparsed_payload_reports_layout_error():
-    snapshot = _build_snapshot(
-        {
-            "logged_out": False,
-            "usage": [],
-            "title": "OpenCode",
-            "body_text": "Usage",
-        }
+@responses.activate
+def test_refresh_maps_missing_subscription_to_error(monkeypatch):
+    monkeypatch.setattr(
+        "aigauge.providers.opencode_go.get_opencode_go_key",
+        lambda account_id: "key-without-go",
     )
+    responses.add(responses.GET, OPENCODE_GO_USAGE_API, status=403)
+    provider = OpenCodeGoProvider(Config())
+    _sync(provider, monkeypatch)
+    captured = []
 
-    assert snapshot.status == SnapshotStatus.ERROR
-    assert "layout may have changed" in (snapshot.error or "")
+    provider.refresh(captured.append)
 
-def test_opencode_snapshot_uses_account_identity():
-    snapshot = _build_snapshot(
-        {
-            "logged_out": False,
-            "usage": [{"label": "Rolling Usage", "percent": 13}],
-            "title": "OpenCode",
-            "body_text": "Rolling Usage 13%",
-        },
-        account_id="opencode_go-work",
+    assert captured[0].status == SnapshotStatus.ERROR
+    assert "subscription" in (captured[0].error or "")
+
+
+@responses.activate
+def test_refresh_surfaces_network_failure(monkeypatch):
+    monkeypatch.setattr(
+        "aigauge.providers.opencode_go.get_opencode_go_key",
+        lambda account_id: "test-key",
     )
-
-    assert snapshot.provider == "opencode_go-work"
-
-
-def test_usage_url_is_account_specific():
-    config = Config()
-    config.browser_accounts.append(
-        BrowserAccount(
-            id="opencode_go-work",
-            kind="opencode_go",
-            name="Work",
-            usage_url="https://opencode.ai/workspace/work/go",
-        )
+    responses.add(
+        responses.GET,
+        OPENCODE_GO_USAGE_API,
+        body=requests.ConnectionError("offline"),
     )
+    provider = OpenCodeGoProvider(Config())
+    _sync(provider, monkeypatch)
+    captured = []
 
-    assert usage_url(config, "opencode_go-work") == (
-        "https://opencode.ai/workspace/work/go"
-    )
-    assert usage_url(config, "opencode_go") != usage_url(
-        config,
-        "opencode_go-work",
-    )
+    provider.refresh(captured.append)
+
+    assert captured[0].status == SnapshotStatus.ERROR
+    assert "failed" in (captured[0].error or "")

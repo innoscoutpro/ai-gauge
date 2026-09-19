@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.4 - 2026-09-19
+
+### Changed
+
+- Replaced OpenCode's expired browser-session scraping flow with its authenticated Go usage API. OpenCode accounts now use masked per-account API-key fields in Settings, store those keys in the system credential store, and report clear missing-key, invalid-key, subscription, network, and response-shape errors.
+
 ## 0.8.3 - 2026-09-19
 
 ### Changed

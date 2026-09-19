@@ -7,7 +7,7 @@ Microsoft, OpenCode, OpenRouter, or any other provider.
 ## Reporting a Vulnerability
 
 Please do not open a public issue for a vulnerability that exposes session
-cookies, GitHub tokens, OpenRouter keys, or other secrets.
+cookies, GitHub tokens, OpenCode/OpenRouter keys, or other secrets.
 
 Preferred channel: open a private security advisory at
 <https://github.com/jpajak/ai-gauge/security/advisories/new>.
@@ -30,16 +30,17 @@ uses its native credential store; the threat model is the same shape on
 all three: same-user processes can decrypt the data, but other local users
 cannot.
 
-| OS      | Cookies                                                      | GitHub PAT / OpenRouter keys |
-| ------- | ------------------------------------------------------------ | ---------------------------- |
-| Windows | DPAPI-encrypted `%APPDATA%/ai-gauge/secrets.dat`             | Windows Credential Manager   |
-| macOS   | Login Keychain                                               | Login Keychain               |
-| Linux   | Secret Service (GNOME Keyring / KWallet) via `keyring`       | same                         |
+| OS      | Claude / Codex cookies                                        | API keys and GitHub PAT      |
+| ------- | ------------------------------------------------------------- | ---------------------------- |
+| Windows | DPAPI-encrypted `%APPDATA%/ai-gauge/secrets.dat`              | Windows Credential Manager   |
+| macOS   | Login Keychain                                                | Login Keychain               |
+| Linux   | Secret Service (GNOME Keyring / KWallet) via `keyring`        | same                         |
 
 Embedded browser profiles live under `<app-data>/profiles/{account-id}/` on
-every OS. The default Claude, Codex, and OpenCode account IDs are `claude`,
-`codex`, and `opencode_go`; additional Claude/Codex accounts get their own
-generated IDs and profiles.
+every OS. The default Claude and Codex account IDs are `claude` and `codex`;
+additional Claude/Codex accounts get their own generated IDs and profiles.
+OpenCode uses per-account API keys in the system keychain and does not require a
+browser profile.
 
 ### MCP usage cache
 
@@ -62,10 +63,10 @@ the credential store, and it exposes no network transport (stdio only).
 ### Why the split on Windows?
 
 Windows Credential Manager caps each blob at ~2.5 KB, which is fine for a
-GitHub PAT or OpenRouter key but smaller than some browser session cookies,
+GitHub PAT, OpenCode key, or OpenRouter key but smaller than some browser session cookies,
 especially ChatGPT's `__Secure-next-auth.session-token` JWT.
 On Windows we therefore keep cookies in `secrets.dat`, encrypted with DPAPI
-(`CryptProtectData`), and keep the GitHub PAT and OpenRouter keys in
+(`CryptProtectData`), and keep API keys and the GitHub PAT in
 Credential Manager. macOS Keychain and the Linux Secret Service have no
 comparable size limit, so on those platforms everything goes through
 `keyring`.
@@ -86,7 +87,8 @@ account**, not to AI Gauge specifically:
 The secrets stored here are session tokens and API keys, not just passwords.
 Recovery of a Claude or ChatGPT session cookie is functionally equivalent to
 taking over the account in a browser until the cookie expires. Recovery of a
-GitHub PAT or OpenRouter key can allow API access within that token's scope.
+GitHub PAT, OpenCode key, or OpenRouter key can allow API access within that
+token's scope.
 Treat your OS user profile accordingly.
 
 On non-Windows hosts the legacy `secret_storage` write path is **disabled
@@ -116,11 +118,10 @@ The fallback sign-in window uses an in-process `QWebEngineView` with a per-accou
 profile under `<app-data>/profiles/{account-id}/`. Cookies it acquires are
 kept inside that account profile and are not shared with your real Chrome or
 Edge browser. Multiple Claude/Codex accounts are isolated from each other by
-using separate profile directories and separate stored cookie secrets;
-OpenCode uses its own `opencode_go` profile and cookie secret.
+using separate profile directories and separate stored cookie secrets.
 
 Navigation in the embedded browser is restricted to an allowlist of
-provider auth domains (Claude, ChatGPT, OpenCode, and their known
+provider auth domains (Claude, ChatGPT, and their known
 OAuth/identity hops plus the magic-link delivery surfaces). Off-allowlist
 navigations are blocked as defense-in-depth against an open-redirect bug on a
 provider sending the embedded browser to an arbitrary URL.
@@ -133,7 +134,7 @@ endpoints needed to read usage information.
 
 Diagnostic logs are written locally to `<app-data>/ai-gauge.log`. Logs
 are intended to avoid recording
-raw cookies, personal access tokens, OpenRouter keys, and sensitive response
+raw cookies, personal access tokens, OpenCode/OpenRouter keys, and sensitive response
 bodies. Review logs before sharing them in an issue.
 
 ## Scope and Limitations

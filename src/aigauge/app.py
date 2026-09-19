@@ -43,7 +43,7 @@ from .providers.claude import ClaudeProvider
 from .providers.codex import CodexProvider
 from .providers.copilot import CopilotProvider
 from .providers.openrouter import OpenRouterProvider
-from .providers.opencode_go import OpenCodeGoProvider, usage_url as opencode_go_usage_url
+from .providers.opencode_go import OpenCodeGoProvider
 from .ratio import RatioStore, sessions_per_week
 from .ratio_dialog import RatioHistoryDialog
 from .settings_dialog import SettingsDialog
@@ -858,12 +858,11 @@ class App(QObject):
         draft = self._draft_browser_account(provider)
         kind = draft.kind if draft is not None else account_kind(self._config, provider)
         if kind == "opencode_go":
-            url = (
-                draft.usage_url
-                if draft is not None and draft.usage_url
-                else opencode_go_usage_url(self._config, provider)
-            )
-        elif kind in LOGIN_URLS:
+            self.open_settings()
+            if self._settings_dialog is not None:
+                self._settings_dialog.show_provider(kind, provider)
+            return
+        if kind in LOGIN_URLS:
             url, _title = LOGIN_URLS[kind]
         else:
             return
@@ -880,7 +879,6 @@ class App(QObject):
             url,
             f"Sign in to {display_name}",
             account_id=provider,
-            verify_url=url if kind == "opencode_go" else None,
             browser_preference=getattr(self._config, "sign_in_browser", "ask"),
         )
         preference_changed = getattr(dlg, "browser_preference_changed", None)
@@ -906,24 +904,18 @@ class App(QObject):
         kind = draft.kind if draft is not None else account_kind(self._config, provider)
         if kind is None:
             return
+        if kind == "opencode_go":
+            return
         display_name = (
             account_display_name(draft)
             if draft is not None
             else display_name_for_account(self._config, provider)
         )
-        verify_url = None
-        if kind == "opencode_go":
-            verify_url = (
-                draft.usage_url
-                if draft is not None and draft.usage_url
-                else opencode_go_usage_url(self._config, provider)
-            )
         try:
             dlg = CookieDialog(
                 kind,
                 account_id=provider,
                 display_name=display_name,
-                verify_url=verify_url,
             )
         except ValueError:
             return

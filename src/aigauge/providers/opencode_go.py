@@ -1,154 +1,62 @@
 from __future__ import annotations
 
 import logging
-import re
+import math
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from PyQt6.QtCore import QObject
+import requests
 
-from ..config import OPENCODE_GO_USAGE_URL, Config, browser_account
+from ..config import Config, get_opencode_go_key
 from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
-from ._common import is_security_verification_page
-from ._scrape_runner import ScrapeRunner
 from .base import Provider
-from .diagnostics import log_page_diagnosis
 
-_EXPECTED_ROWS = ("rolling", "weekly", "monthly")
+OPENCODE_GO_USAGE_API = "https://opencode.ai/zen/go/v1/usage"
+
 log = logging.getLogger("aigauge.providers.opencode_go")
 
-EXTRACTOR_JS = r"""
-(() => {
-  function visibleText(el) {
-    return ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
-  }
+_METRICS = (
+    ("rolling", "Rolling", timedelta(hours=5)),
+    ("weekly", "Weekly", timedelta(days=7)),
+    ("monthly", "Monthly", timedelta(days=30)),
+)
 
-  function readItem(item) {
-    const label = visibleText(item.querySelector('[data-slot="usage-label"]'));
-    const value = visibleText(item.querySelector('[data-slot="usage-value"]'));
-    const reset = visibleText(item.querySelector('[data-slot="reset-time"]'));
-    const bar = item.querySelector('[data-slot="progress-bar"]');
-    const width = bar && bar.style ? bar.style.width : '';
-    const percentMatch = (value || width || visibleText(item)).match(/(\d+(?:\.\d+)?)\s*%/);
+
+def _headers(api_key: str) -> dict[str, str]:
     return {
-      label,
-      percent: percentMatch ? parseFloat(percentMatch[1]) : null,
-      reset_text: reset || null,
-      raw: visibleText(item).slice(0, 400),
-    };
-  }
-
-  const bodyText = visibleText(document.body);
-  const lowerText = bodyText.toLowerCase();
-  const items = Array.from(document.querySelectorAll('[data-slot="usage-item"]'));
-  const loggedOut =
-    location.pathname.includes('/login') ||
-    location.pathname.includes('/auth') ||
-    document.title.toLowerCase().includes('login') ||
-    (/\b(log in|sign in)\b/i.test(bodyText) && !/usage/i.test(bodyText));
-
-  return {
-    logged_out: loggedOut,
-    usage: items.map(readItem),
-    url: location.href,
-    title: document.title,
-    has_usage_text: /rolling usage|5[- ]hour usage|weekly usage|monthly usage/i.test(bodyText),
-    has_percent_text: /\d+(?:\.\d+)?\s*%/.test(bodyText),
-    body_text: bodyText.slice(0, 2000),
-  };
-})();
-"""
-
-
-def usage_url(
-    config: Config | None = None,
-    account_id: str = "opencode_go",
-) -> str:
-    value = ""
-    if config is not None:
-        account = browser_account(config, account_id)
-        if account is not None:
-            value = str(account.usage_url or "").strip()
-        if not value:
-            value = str(
-                getattr(getattr(config, "opencode_go", None), "usage_url", "") or ""
-            ).strip()
-    return value or OPENCODE_GO_USAGE_URL
-
-
-def _parse_reset_text(text: str | None) -> datetime | None:
-    if not text:
-        return None
-    text = re.sub(r"^\s*resets?\s+in\s+", "", text.strip(), flags=re.IGNORECASE)
-    units = {
-        "day": "days",
-        "days": "days",
-        "hour": "hours",
-        "hours": "hours",
-        "hr": "hours",
-        "hrs": "hours",
-        "h": "hours",
-        "minute": "minutes",
-        "minutes": "minutes",
-        "min": "minutes",
-        "mins": "minutes",
-        "m": "minutes",
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
     }
-    values = {"days": 0, "hours": 0, "minutes": 0}
-    for amount, unit in re.findall(r"(\d+)\s*(days?|hours?|hrs?|h|minutes?|mins?|m)\b", text, re.IGNORECASE):
-        values[units[unit.lower()]] += int(amount)
-    if any(values.values()):
-        return datetime.now() + timedelta(**values)
-    return None
 
 
-def _metric_label(label: str) -> str:
-    label = re.sub(r"\s+usage\b", "", label.strip(), flags=re.IGNORECASE)
-    if re.fullmatch(r"5[- ]hour", label, flags=re.IGNORECASE):
-        return "Rolling"
-    return label.title()
-
-
-def _window_for(label: str) -> timedelta | None:
-    key = label.lower()
-    if key == "rolling":
-        return timedelta(hours=5)
-    if key == "weekly":
-        return timedelta(days=7)
-    if key == "monthly":
-        return timedelta(days=30)
-    return None
-
-
-def _parse_body_usage(body_text: str) -> list[dict[str, Any]]:
-    text = re.sub(r"\s+", " ", body_text or "").strip()
-    rows: list[dict[str, Any]] = []
-    pattern = re.compile(
-        r"\b(Rolling|5[- ]hour|Weekly|Monthly)\s+Usage\b\s*(\d+(?:\.\d+)?)\s*%"
-        r"(?:\s*Resets?\s+in\s+(.+?))?"
-        r"(?=\s+\b(?:Rolling|5[- ]hour|Weekly|Monthly)\s+Usage\b|$)",
-        re.IGNORECASE,
+def _fetch_usage(api_key: str) -> dict[str, Any]:
+    response = requests.get(
+        OPENCODE_GO_USAGE_API,
+        headers=_headers(api_key),
+        timeout=15,
     )
-    for match in pattern.finditer(text):
-        reset = match.group(3).strip() if match.group(3) else None
-        rows.append(
-            {
-                "label": f"{match.group(1).title()} Usage",
-                "percent": float(match.group(2)),
-                "reset_text": f"Resets in {reset}" if reset else None,
-                "raw": match.group(0)[:400],
-            }
-        )
-    return rows
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError("OpenCode returned an unexpected response.")
+    log.debug(
+        "provider api diagnosis provider=opencode_go "
+        "classification=usage_ok status=%s payload_keys=%s",
+        response.status_code,
+        sorted(payload),
+    )
+    return payload
 
 
-def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
-    url = str(payload.get("url") or "").lower()
-    if "/login" in url or "/auth" in url:
-        return True
-    if bool(payload.get("logged_out")):
-        return not bool(payload.get("usage"))
-    return False
+def _parse_reset_at(value: object) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("missing reset time")
+    parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    if parsed.tzinfo is not None:
+        # The rest of AI Gauge uses local, timezone-naive datetimes for display,
+        # scheduling, and history. Preserve the instant while matching that model.
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
 
 
 def _build_snapshot(
@@ -156,79 +64,40 @@ def _build_snapshot(
     *,
     account_id: str = "opencode_go",
 ) -> UsageSnapshot:
-    if _is_logged_out_payload(payload):
-        log_page_diagnosis(
-            log,
-            provider=account_id,
-            classification="logged_out",
-            payload=payload,
-            expected_rows=_EXPECTED_ROWS,
-        )
-        return UsageSnapshot(
-            provider=account_id,
-            status=SnapshotStatus.AUTH_REQUIRED,
-            error="Not signed in to OpenCode.",
-            raw=payload,
-        )
-    if is_security_verification_page(payload):
-        log_page_diagnosis(
-            log,
-            provider=account_id,
-            classification="security_verification",
-            payload=payload,
-            expected_rows=_EXPECTED_ROWS,
-        )
-        return UsageSnapshot(
-            provider=account_id,
-            status=SnapshotStatus.AUTH_REQUIRED,
-            error="OpenCode security verification required. Click Sign in and complete the browser check.",
-            raw=payload,
-        )
-
     usage = payload.get("usage")
-    rows = usage if isinstance(usage, list) else []
-    if not rows:
-        rows = _parse_body_usage(str(payload.get("body_text") or ""))
+    if not isinstance(usage, dict):
+        raise ValueError("OpenCode response is missing usage data.")
 
     metrics: list[UsageMetric] = []
-    seen: set[str] = set()
-    for row in rows:
+    for key, label, window in _METRICS:
+        row = usage.get(key)
         if not isinstance(row, dict):
-            continue
-        label_text = str(row.get("label") or "").strip()
-        percent = row.get("percent")
-        if not label_text or percent is None:
-            continue
-        label = _metric_label(label_text)
-        key = label.lower()
-        if key not in _EXPECTED_ROWS or key in seen:
-            continue
-        seen.add(key)
-        reset_text = str(row.get("reset_text") or "").strip() or None
+            raise ValueError(f"OpenCode response is missing {label.lower()} usage.")
+        try:
+            percent = float(row["percent"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"OpenCode returned an invalid {label.lower()} percentage."
+            ) from exc
+        if not math.isfinite(percent):
+            raise ValueError(
+                f"OpenCode returned an invalid {label.lower()} percentage."
+            )
+        status = str(row.get("status") or "").lower()
+        if status not in ("ok", "rate-limited"):
+            raise ValueError(
+                f"OpenCode returned an unknown {label.lower()} usage status."
+            )
+        if status == "rate-limited":
+            percent = max(100.0, percent)
         metrics.append(
             UsageMetric(
                 label=label,
-                percent_used=float(percent),
-                resets_at=_parse_reset_text(reset_text),
-                note=reset_text,
-                window=_window_for(label),
+                percent_used=max(0.0, min(100.0, percent)),
+                resets_at=_parse_reset_at(row.get("resetsAt")),
+                window=window,
+                note="Rate limit reached." if status == "rate-limited" else None,
             )
-        )
-
-    if not metrics:
-        log_page_diagnosis(
-            log,
-            provider=account_id,
-            classification="layout_changed",
-            payload=payload,
-            expected_rows=_EXPECTED_ROWS,
-            level=logging.WARNING,
-        )
-        return UsageSnapshot(
-            provider=account_id,
-            status=SnapshotStatus.ERROR,
-            error="Could not read OpenCode usage from page (layout may have changed).",
-            raw=payload,
         )
 
     return UsageSnapshot(
@@ -246,27 +115,104 @@ class OpenCodeGoProvider(Provider):
     def __init__(
         self,
         config: Config,
-        parent: QObject | None = None,
+        parent=None,
         account_id: str = "opencode_go",
+        pool=None,
     ):
-        self._parent = parent
+        # Keep config and parent in the signature for compatibility with the
+        # other account providers and existing app construction.
         self._config = config
         self._account_id = account_id
-        self._runner: ScrapeRunner | None = None
+        self._pool = pool
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
-        def _build(payload: dict[str, Any]) -> UsageSnapshot:
-            return _build_snapshot(payload, account_id=self._account_id)
+        api_key = get_opencode_go_key(self._account_id)
+        if not api_key:
+            on_done(
+                UsageSnapshot(
+                    provider=self._account_id,
+                    status=SnapshotStatus.AUTH_REQUIRED,
+                    error="Add an OpenCode Go API key in Settings.",
+                )
+            )
+            return
 
-        self._runner = ScrapeRunner(
-            account_id=self._account_id,
-            url=usage_url(self._config, self._account_id),
-            extractor_js=EXTRACTOR_JS,
-            build=_build,
-            log=log,
-            wait_ms=5000,
-            transport_max_attempts=1,
-            build_max_attempts=2,
-            parent=self._parent,
-        )
-        self._runner.run(on_done)
+        def work() -> UsageSnapshot:
+            try:
+                return _build_snapshot(
+                    _fetch_usage(api_key),
+                    account_id=self._account_id,
+                )
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else 0
+                log.warning(
+                    "provider api diagnosis provider=%s "
+                    "classification=usage_http_error status=%s",
+                    self._account_id,
+                    status,
+                )
+                if status == 401:
+                    return UsageSnapshot(
+                        provider=self._account_id,
+                        status=SnapshotStatus.AUTH_REQUIRED,
+                        error="OpenCode rejected the API key. Update it in Settings.",
+                    )
+                if status == 403:
+                    return UsageSnapshot(
+                        provider=self._account_id,
+                        status=SnapshotStatus.ERROR,
+                        error="This API key does not have an active OpenCode Go subscription.",
+                    )
+                return UsageSnapshot(
+                    provider=self._account_id,
+                    status=SnapshotStatus.ERROR,
+                    error=f"OpenCode usage API returned HTTP {status}.",
+                )
+            except requests.RequestException as exc:
+                return UsageSnapshot(
+                    provider=self._account_id,
+                    status=SnapshotStatus.ERROR,
+                    error=f"OpenCode usage request failed: {exc}",
+                )
+            except (TypeError, ValueError) as exc:
+                log.warning(
+                    "provider api diagnosis provider=%s "
+                    "classification=unexpected_response error=%s",
+                    self._account_id,
+                    exc,
+                )
+                return UsageSnapshot(
+                    provider=self._account_id,
+                    status=SnapshotStatus.ERROR,
+                    error=str(exc),
+                )
+
+        self._run_async(work, on_done)
+
+    def _run_async(
+        self,
+        work: Callable[[], UsageSnapshot],
+        on_done: Callable[[UsageSnapshot], None],
+    ) -> None:
+        from PyQt6.QtCore import QRunnable, QThreadPool
+
+        class _Worker(QRunnable):
+            def run(self_inner) -> None:  # noqa: N805
+                try:
+                    snapshot = work()
+                except Exception as exc:  # noqa: BLE001
+                    log.exception(
+                        "provider api diagnosis provider=%s "
+                        "classification=unexpected_exception type=%s",
+                        self._account_id,
+                        type(exc).__name__,
+                    )
+                    snapshot = UsageSnapshot(
+                        provider=self._account_id,
+                        status=SnapshotStatus.ERROR,
+                        error=str(exc),
+                    )
+                on_done(snapshot)
+
+        pool = self._pool or QThreadPool.globalInstance()
+        pool.start(_Worker())

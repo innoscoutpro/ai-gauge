@@ -62,11 +62,6 @@ COOKIE_DOMAINS = {
     "codex": ".chatgpt.com",
     "opencode_go": ".opencode.ai",
 }
-OPENCODE_GO_USAGE_URL = (
-    "https://opencode.ai/workspace/wrk_01KX3HT8MFWCMHR2289KGPZ1RD/go"
-)
-
-
 def app_data_dir() -> Path:
     """Per-OS config / log / secrets directory.
 
@@ -143,7 +138,6 @@ class BrowserAccount(BaseModel):
     name: str | None = None
     enabled: bool = True
     colors: ColorThresholds = Field(default_factory=ColorThresholds)
-    usage_url: str | None = None
     # Claude Max plans expose a separate weekly Fable limit. This is per
     # account rather than per provider: plan tier belongs to the subscription,
     # and one signed-in account may be Max while another is not. On by default
@@ -166,8 +160,6 @@ class OpenRouterConfig(BaseModel):
 
 
 class OpenCodeGoConfig(BaseModel):
-    # Retained for migrating pre-0.7.0 singleton OpenCode configurations.
-    usage_url: str = OPENCODE_GO_USAGE_URL
     colors: ColorThresholds = Field(default_factory=ColorThresholds)
 
 
@@ -221,7 +213,6 @@ class Config(BaseModel):
             BrowserAccount(
                 id="opencode_go",
                 kind="opencode_go",
-                usage_url=OPENCODE_GO_USAGE_URL,
             ),
         ]
     )
@@ -298,11 +289,6 @@ class Config(BaseModel):
                 if isinstance(item, dict)
             ):
                 legacy_opencode = data.get("opencode_go")
-                usage_url = (
-                    legacy_opencode.get("usage_url")
-                    if isinstance(legacy_opencode, dict)
-                    else None
-                )
                 colors = (
                     legacy_opencode.get("colors")
                     if isinstance(legacy_opencode, dict)
@@ -313,7 +299,6 @@ class Config(BaseModel):
                     "kind": "opencode_go",
                     "name": None,
                     "enabled": True,
-                    "usage_url": usage_url or OPENCODE_GO_USAGE_URL,
                 }
                 if isinstance(colors, dict):
                     account["colors"] = colors
@@ -550,3 +535,31 @@ def get_provider_cookie(provider: str) -> str | None:
 
 def set_provider_cookie(provider: str, value: str | None) -> None:
     get_platform().save_secret(_cookie_key(provider), value)
+
+
+def _opencode_go_key_key(account_id: str) -> str:
+    return f"opencode-go-key-{account_id}"
+
+
+def get_opencode_go_key(account_id: str = "opencode_go") -> str | None:
+    """Load one OpenCode account's API key from the system keychain."""
+    try:
+        key = keyring.get_password(KEYRING_SERVICE, _opencode_go_key_key(account_id))
+        return key or None
+    except keyring.errors.KeyringError:
+        return None
+
+
+def set_opencode_go_key(
+    account_id: str,
+    value: str | None,
+) -> None:
+    """Save or clear one OpenCode account's API key in the system keychain."""
+    key_name = _opencode_go_key_key(account_id)
+    if value:
+        keyring.set_password(KEYRING_SERVICE, key_name, value)
+    else:
+        try:
+            keyring.delete_password(KEYRING_SERVICE, key_name)
+        except keyring.errors.KeyringError:
+            pass

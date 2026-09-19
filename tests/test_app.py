@@ -231,7 +231,6 @@ def test_enabled_providers_includes_multiple_opencode_accounts_when_enabled():
             id="opencode_go-work",
             kind="opencode_go",
             name="Work",
-            usage_url="https://opencode.ai/workspace/work/go",
         )
     )
     config.providers.opencode_go = True
@@ -251,13 +250,11 @@ def test_build_providers_creates_one_provider_per_opencode_account(monkeypatch):
             BrowserAccount(
                 id="opencode_go",
                 kind="opencode_go",
-                usage_url="https://opencode.ai/workspace/personal/go",
             ),
             BrowserAccount(
                 id="opencode_go-work",
                 kind="opencode_go",
                 name="Work",
-                usage_url="https://opencode.ai/workspace/work/go",
             ),
         ]
     )
@@ -328,49 +325,26 @@ def test_build_providers_passes_per_account_fable_toggle(monkeypatch):
     assert created == [("claude", True), ("claude-b", False)]
 
 
-def test_open_login_uses_unsaved_opencode_account_url(monkeypatch):
+def test_opencode_auth_action_opens_account_key_settings():
     draft = BrowserAccount(
         id="opencode_go-work",
         kind="opencode_go",
         name="Work",
-        usage_url="https://opencode.ai/workspace/work/go",
     )
     captured = []
-
-    class FakeLoginWindow:
-        def __init__(self, *args, **kwargs):
-            captured.append((args, kwargs))
-
-        def exec(self):
-            return False
-
-    monkeypatch.setattr(app_module, "LoginWindow", FakeLoginWindow)
-    # Sign-in is refused when QtWebEngine is unusable, and the offscreen test
-    # platform genuinely has no GL context. This test drives a fake window.
-    monkeypatch.setattr(app_module.webengine, "is_available", lambda: True)
     app = App.__new__(App)
     app._config = Config()  # noqa: SLF001
     app._settings_dialog = SimpleNamespace(  # noqa: SLF001
         draft_browser_account=lambda account_id: (
             draft if account_id == draft.id else None
-        )
+        ),
+        show_provider=lambda kind, account_id: captured.append((kind, account_id)),
     )
-    app._widget = SimpleNamespace(  # noqa: SLF001
-        suspend_always_on_top=lambda: None,
-        restore_always_on_top=lambda: None,
-    )
+    app.open_settings = lambda: None
 
     app.open_login("opencode_go-work")
 
-    args, kwargs = captured[0]
-    assert args == (
-        "opencode_go",
-        "https://opencode.ai/workspace/work/go",
-        "Sign in to OpenCode (Work)",
-    )
-    assert kwargs["account_id"] == "opencode_go-work"
-    assert kwargs["verify_url"] == "https://opencode.ai/workspace/work/go"
-    assert kwargs["browser_preference"] == "ask"
+    assert captured == [("opencode_go", "opencode_go-work")]
 
 
 def test_login_refreshes_immediately_when_embedded_session_changed(monkeypatch):

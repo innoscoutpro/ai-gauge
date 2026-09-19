@@ -3,6 +3,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
+import aigauge.config as config_module
 from aigauge.config import (
     BrowserAccount,
     ColorThresholds,
@@ -14,7 +15,9 @@ from aigauge.config import (
     browser_accounts,
     config_path,
     display_name_for_account,
+    get_opencode_go_key,
     qt_scale_factor_env,
+    set_opencode_go_key,
     webview_profile_dir,
 )
 
@@ -36,9 +39,6 @@ def test_defaults():
         "codex",
         "opencode_go",
     ]
-    assert c.browser_accounts[2].usage_url.startswith(
-        "https://opencode.ai/workspace/"
-    )
     assert c.providers.copilot is True
     assert c.providers.opencode_go is False
     assert c.start_at_login is False
@@ -46,7 +46,6 @@ def test_defaults():
     assert c.copilot.monthly_quota == 1500
     assert c.mcp_enabled is False
     assert c.mcp_pause_policies == {}
-    assert c.opencode_go.usage_url.startswith("https://opencode.ai/workspace/")
     assert c.collapsed_tiles == []
     assert c.window.always_on_top is True
     assert c.window.collapsed is False
@@ -96,9 +95,6 @@ def test_round_trip(tmp_path, monkeypatch):
     c.window.show_header = False
     c.window.snap_corner = "bottom_right"
     c.providers.opencode_go = True
-    browser_account(c, "opencode_go").usage_url = (
-        "https://opencode.ai/workspace/test/go"
-    )
     c.collapsed_tiles = ["claude"]
     c.mcp_enabled = True
     c.mcp_pause_policies = {"codex": 90}
@@ -119,10 +115,6 @@ def test_round_trip(tmp_path, monkeypatch):
     assert loaded.window.x == 100
     assert loaded.window.y == 200
     assert loaded.providers.opencode_go is True
-    assert (
-        browser_account(loaded, "opencode_go").usage_url
-        == "https://opencode.ai/workspace/test/go"
-    )
     assert loaded.collapsed_tiles == ["claude"]
     assert loaded.mcp_enabled is True
     assert loaded.mcp_pause_policies == {"codex": 90}
@@ -200,6 +192,34 @@ def test_paths_under_appdata(tmp_path):
     assert webview_profile_dir("claude") == app_data_dir() / "profiles" / "claude"
 
 
+def test_opencode_keys_are_stored_per_account(monkeypatch):
+    secrets = {}
+    monkeypatch.setattr(
+        config_module.keyring,
+        "get_password",
+        lambda service, key: secrets.get((service, key)),
+    )
+    monkeypatch.setattr(
+        config_module.keyring,
+        "set_password",
+        lambda service, key, value: secrets.__setitem__((service, key), value),
+    )
+    monkeypatch.setattr(
+        config_module.keyring,
+        "delete_password",
+        lambda service, key: secrets.pop((service, key), None),
+    )
+
+    set_opencode_go_key("opencode_go", "personal-key")
+    set_opencode_go_key("opencode_go-work", "work-key")
+
+    assert get_opencode_go_key("opencode_go") == "personal-key"
+    assert get_opencode_go_key("opencode_go-work") == "work-key"
+    set_opencode_go_key("opencode_go", None)
+    assert get_opencode_go_key("opencode_go") is None
+    assert get_opencode_go_key("opencode_go-work") == "work-key"
+
+
 def test_load_corrupt_falls_back_to_defaults():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text("{ not valid json", encoding="utf-8")
@@ -233,7 +253,6 @@ def test_load_migrates_legacy_copilot_pro_request_quota_to_credits():
     c = Config.load()
 
     assert c.copilot.monthly_quota == 1500
-    assert c.opencode_go.usage_url.startswith("https://opencode.ai/workspace/")
     assert c.collapsed_tiles == []
 
 def test_load_migrates_legacy_provider_toggles_to_browser_accounts():
@@ -308,7 +327,7 @@ def test_load_preserves_explicitly_removed_accounts_after_v2_migration():
     assert c.browser_accounts == []
 
 
-def test_load_migrates_single_opencode_settings_to_account():
+def test_load_migrates_single_opencode_colors_to_account():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
         '{"browser_accounts": [], "opencode_go": {'
@@ -321,7 +340,6 @@ def test_load_migrates_single_opencode_settings_to_account():
     account = browser_account(c, "opencode_go")
 
     assert account is not None
-    assert account.usage_url == "https://opencode.ai/workspace/legacy/go"
     assert account.colors.green_max == 20
     assert c.browser_accounts_version == 2
 
@@ -352,7 +370,6 @@ def test_secondary_opencode_account_resolves_kind_and_display_name():
             id="opencode_go-work",
             kind="opencode_go",
             name="Work",
-            usage_url="https://opencode.ai/workspace/work/go",
         )
     )
 

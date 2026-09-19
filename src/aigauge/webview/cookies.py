@@ -323,7 +323,9 @@ def hydrate_all_from_keyring(config: Config | None = None) -> list[str]:
     loaded: list[str] = []
     if config is not None:
         account_specs = [
-            (account.kind, account.id) for account in browser_accounts(config)
+            (account.kind, account.id)
+            for account in browser_accounts(config)
+            if account.kind in ("claude", "codex")
         ]
     else:
         account_specs = [(provider, provider) for provider in COOKIE_NAMES]

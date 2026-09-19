@@ -410,7 +410,7 @@ def test_cookie_hydration_injects_when_profile_cookies_file_is_missing(
 
     assert cookies.hydrate_all_from_keyring(config) == ["codex-fresh"]
     assert injected == [("codex", "codex-fresh")]
-def test_cookie_hydration_uses_independent_opencode_accounts(monkeypatch):
+def test_cookie_hydration_ignores_opencode_api_accounts(monkeypatch):
     config = Config()
     config.providers.opencode_go = True
     config.browser_accounts.append(
@@ -418,7 +418,6 @@ def test_cookie_hydration_uses_independent_opencode_accounts(monkeypatch):
             id="opencode_go-work",
             kind="opencode_go",
             name="Work",
-            usage_url="https://opencode.ai/workspace/work/go",
         )
     )
 
@@ -439,15 +438,5 @@ def test_cookie_hydration_uses_independent_opencode_accounts(monkeypatch):
         or True,
     )
 
-    assert cookies.hydrate_all_from_keyring(config) == [
-        "opencode_go",
-        "opencode_go-work",
-    ]
-    assert injected == [
-        ("opencode_go", "Cookie: auth=opencode_go", None),
-        (
-            "opencode_go",
-            "Cookie: auth=opencode_go-work",
-            "opencode_go-work",
-        ),
-    ]
+    assert cookies.hydrate_all_from_keyring(config) == []
+    assert injected == []

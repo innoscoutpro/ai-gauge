@@ -46,10 +46,12 @@ from .config import (
     app_data_dir,
     browser_accounts,
     get_github_pat,
+    get_opencode_go_key,
     get_openrouter_key,
     get_openrouter_mgmt_key,
     provider_base_name,
     set_github_pat,
+    set_opencode_go_key,
     set_openrouter_key,
     set_openrouter_mgmt_key,
 )
@@ -59,7 +61,6 @@ from .local_usage.settings_panel import LocalUsagePanel
 from .logging_setup import log_path
 from .providers.claude import CLAUDE_USAGE_URL
 from .providers.codex import CODEX_USAGE_URL
-from .providers.opencode_go import OPENCODE_GO_USAGE_URL
 from .startup import set_start_at_login
 from .webview.cookies import clear_browser_session  # lazy inside; no WebEngine at import
 
@@ -506,6 +507,9 @@ class _BrowserAccountRow(QWidget):
         self.account_id = account.id
         self.kind = account.kind
         self.colors = account.colors.model_copy(deep=True)
+        self.api_key_edit: QLineEdit | None = None
+        self.clear_api_key_cb: QCheckBox | None = None
+        self._had_existing_api_key = False
 
         self.name_edit = QLineEdit()
         self.name_edit.setText(account.name or "")
@@ -516,26 +520,6 @@ class _BrowserAccountRow(QWidget):
         )
         self.name_edit.setMinimumWidth(120)
 
-        sign_in = QPushButton("Sign in")
-        sign_in.setObjectName(f"{account.id}_signin_btn")
-        sign_in.setFixedWidth(68)
-        sign_in.setToolTip(
-            "Sign in with your installed browser; Google and passkeys are supported."
-        )
-        sign_in.clicked.connect(lambda: self.sign_in_clicked.emit(self.account_id))
-
-        paste = QPushButton("Paste cookie")
-        paste.setObjectName(f"{account.id}_paste_cookie_btn")
-        paste.setFixedWidth(92)
-        paste.setToolTip("Paste a session cookie for this account.")
-        paste.clicked.connect(lambda: self.paste_cookie_clicked.emit(self.account_id))
-
-        clear = QPushButton("Clear sign-in")
-        clear.setObjectName(f"{account.id}_clear_signin_btn")
-        clear.setFixedWidth(92)
-        clear.setToolTip("Remove this account's saved sign-in from AI Gauge.")
-        clear.clicked.connect(lambda: self.clear_sign_in_clicked.emit(self.account_id))
-
         colors = QPushButton("Colors…")
         colors.setFixedWidth(68)
         colors.setToolTip("Set gauge color thresholds for this account.")
@@ -544,20 +528,45 @@ class _BrowserAccountRow(QWidget):
         remove = QPushButton("Remove")
         remove.setFixedWidth(72)
         remove.setVisible(removable)
-        remove.setToolTip("Remove this account and clear its saved cookie.")
+        remove.setToolTip("Remove this account and its saved credentials.")
         remove.clicked.connect(lambda: self.remove_clicked.emit(self.account_id))
 
         account_actions = QHBoxLayout()
         account_actions.setContentsMargins(0, 0, 0, 0)
         account_actions.setSpacing(6)
         account_actions.addWidget(self.name_edit, 1)
-        account_actions.addWidget(sign_in)
-        account_actions.addWidget(paste)
-        account_actions.addWidget(clear)
+        if account.kind != "opencode_go":
+            sign_in = QPushButton("Sign in")
+            sign_in.setObjectName(f"{account.id}_signin_btn")
+            sign_in.setFixedWidth(68)
+            sign_in.setToolTip(
+                "Sign in with your installed browser; Google and passkeys are supported."
+            )
+            sign_in.clicked.connect(
+                lambda: self.sign_in_clicked.emit(self.account_id)
+            )
+            account_actions.addWidget(sign_in)
+
+            paste = QPushButton("Paste cookie")
+            paste.setObjectName(f"{account.id}_paste_cookie_btn")
+            paste.setFixedWidth(92)
+            paste.setToolTip("Paste a session cookie for this account.")
+            paste.clicked.connect(
+                lambda: self.paste_cookie_clicked.emit(self.account_id)
+            )
+            account_actions.addWidget(paste)
+
+            clear = QPushButton("Clear sign-in")
+            clear.setObjectName(f"{account.id}_clear_signin_btn")
+            clear.setFixedWidth(92)
+            clear.setToolTip("Remove this account's saved sign-in from AI Gauge.")
+            clear.clicked.connect(
+                lambda: self.clear_sign_in_clicked.emit(self.account_id)
+            )
+            account_actions.addWidget(clear)
         account_actions.addWidget(colors)
         account_actions.addWidget(remove)
 
-        self.usage_url_edit: QLineEdit | None = None
         self.fable_cb: QCheckBox | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -579,27 +588,32 @@ class _BrowserAccountRow(QWidget):
             fable_row.addStretch(1)
             layout.addLayout(fable_row)
         if account.kind == "opencode_go":
-            self.usage_url_edit = QLineEdit()
-            self.usage_url_edit.setText(account.usage_url or OPENCODE_GO_USAGE_URL)
-            self.usage_url_edit.setPlaceholderText(OPENCODE_GO_USAGE_URL)
-            self.usage_url_edit.setToolTip(
-                "The workspace Go usage page for this OpenCode subscription."
+            self.api_key_edit = QLineEdit()
+            self.api_key_edit.setObjectName(f"{account.id}_api_key_edit")
+            self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+            self._had_existing_api_key = bool(get_opencode_go_key(account.id))
+            self.api_key_edit.setPlaceholderText(
+                "•••••••••• (saved — leave blank to keep)"
+                if self._had_existing_api_key
+                else "oc_sk_..."
             )
-            open_usage = QPushButton("Open usage")
-            open_usage.setObjectName(f"{account.id}_open_usage_btn")
-            open_usage.setFixedWidth(92)
-            open_usage.clicked.connect(
-                lambda _checked=False: _open_in_browser(
-                    self.usage_url_edit.text().strip() or OPENCODE_GO_USAGE_URL
-                )
+            self.api_key_edit.setToolTip(
+                "OpenCode API key for this subscription. The key is stored in "
+                "the system keychain."
             )
-            usage_row = QHBoxLayout()
-            usage_row.setContentsMargins(0, 0, 0, 0)
-            usage_row.setSpacing(6)
-            usage_row.addWidget(QLabel("Usage URL:"))
-            usage_row.addWidget(self.usage_url_edit, 1)
-            usage_row.addWidget(open_usage)
-            layout.addLayout(usage_row)
+            key_row = QHBoxLayout()
+            key_row.setContentsMargins(0, 0, 0, 0)
+            key_row.setSpacing(6)
+            key_row.addWidget(QLabel("API key:"))
+            key_row.addWidget(self.api_key_edit, 1)
+            self.clear_api_key_cb = QCheckBox("Clear saved key")
+            self.clear_api_key_cb.setObjectName(f"{account.id}_clear_api_key_cb")
+            self.clear_api_key_cb.setVisible(self._had_existing_api_key)
+            self.clear_api_key_cb.setToolTip(
+                "Remove this account's API key from the system keychain."
+            )
+            key_row.addWidget(self.clear_api_key_cb)
+            layout.addLayout(key_row)
 
     def _edit_colors(self) -> None:
         dialog = _ColorThresholdDialog(self.colors, self)
@@ -608,16 +622,12 @@ class _BrowserAccountRow(QWidget):
 
     def to_account(self) -> BrowserAccount:
         name = self.name_edit.text().strip() or None
-        usage_url = None
-        if self.usage_url_edit is not None:
-            usage_url = self.usage_url_edit.text().strip() or OPENCODE_GO_USAGE_URL
         return BrowserAccount(
             id=self.account_id,
             kind=self.kind,
             name=name,
             enabled=True,
             colors=self.colors.model_copy(deep=True),
-            usage_url=usage_url,
             show_fable=self.fable_cb is not None and self.fable_cb.isChecked(),
         )
 
@@ -641,7 +651,8 @@ class SettingsDialog(QDialog):
         self.setStyleSheet(_build_stylesheet())
         self._config = config
         self._browser_account_rows: list[_BrowserAccountRow] = []
-        self._removed_browser_account_ids: list[str] = []
+        self._removed_browser_accounts: dict[str, str] = {}
+        self._opencode_key_drafts: dict[str, tuple[str, bool]] = {}
         self.browser_session_clear_errors: list[tuple[str, str]] = []
         self._browser_accounts = [
             account.model_copy(deep=True) for account in browser_accounts(config)
@@ -748,8 +759,8 @@ class SettingsDialog(QDialog):
         self.sign_in_browser_combo = QComboBox()
         self.sign_in_browser_combo.setMinimumWidth(180)
         self.sign_in_browser_combo.setToolTip(
-            "Choose the isolated browser AI Gauge uses for Claude, Codex, and "
-            "OpenCode sign-in. Automatic import supports Chrome-family browsers; "
+            "Choose the isolated browser AI Gauge uses for Claude and Codex "
+            "sign-in. Automatic import supports Chrome-family browsers; "
             "embedded sign-in may not support Google or passkeys."
         )
         for label, browser_id in _SIGN_IN_BROWSER_CHOICES:
@@ -1019,10 +1030,11 @@ class SettingsDialog(QDialog):
         opencode_go_layout.setSpacing(8)
         opencode_go_layout.addWidget(
             _hint_label(
-                "Name each OpenCode subscription and paste its workspace <b>Go</b> "
-                "usage-page URL. Every row has an independent browser session, "
-                "tile, and gauge colors. <b>Sign in</b> opens a real installed "
-                "browser and connects that subscription automatically."
+                "Name each OpenCode Go subscription and enter its API key. "
+                "Sign in and copy a key at <a style='color:#60a5fa;' "
+                "href='https://opencode.ai/auth'>opencode.ai/auth</a>. Every "
+                "row has an independent key, tile, and gauge colors; keys are "
+                "stored in your system keychain."
             )
         )
         self._opencode_go_accounts_layout = QVBoxLayout()
@@ -1131,6 +1143,7 @@ class SettingsDialog(QDialog):
         mcp_layout.addStretch(1)
 
         tabs = QTabWidget()
+        self.tabs = tabs
         tabs.addTab(general_tab, "General")
         tabs.addTab(claude_tab, "Claude")
         tabs.addTab(codex_tab, "Codex")
@@ -1209,6 +1222,29 @@ class SettingsDialog(QDialog):
         layout.addWidget(tabs, 1)
         layout.addLayout(button_row)
 
+    def show_provider(self, kind: str, account_id: str | None = None) -> None:
+        tab_index = {
+            "claude": 1,
+            "codex": 2,
+            "opencode_go": 3,
+            "copilot": 4,
+            "openrouter": 5,
+        }.get(kind)
+        if tab_index is not None:
+            self.tabs.setCurrentIndex(tab_index)
+        if account_id is None:
+            return
+        row = next(
+            (
+                item
+                for item in self._browser_account_rows
+                if item.account_id == account_id
+            ),
+            None,
+        )
+        if row is not None and row.api_key_edit is not None:
+            row.api_key_edit.setFocus()
+
     def _new_account_id(self, kind: str) -> str:
         existing = {account.id for account in self._browser_accounts}
         while True:
@@ -1221,6 +1257,7 @@ class SettingsDialog(QDialog):
         return f"Account {count + 1}"
 
     def _add_browser_account(self, kind: str) -> None:
+        self._capture_opencode_key_drafts()
         self._browser_accounts = self._current_browser_accounts()
         self._browser_accounts.append(
             BrowserAccount(
@@ -1228,21 +1265,37 @@ class SettingsDialog(QDialog):
                 kind=kind,
                 name=self._next_account_name(kind),
                 enabled=True,
-                usage_url=(
-                    OPENCODE_GO_USAGE_URL if kind == "opencode_go" else None
-                ),
             )
         )
         self._rebuild_browser_account_rows()
 
     def _remove_browser_account(self, account_id: str) -> None:
+        self._capture_opencode_key_drafts()
+        removed = next(
+            (account for account in self._browser_accounts if account.id == account_id),
+            None,
+        )
         self._browser_accounts = [
             account
             for account in self._current_browser_accounts()
             if account.id != account_id
         ]
-        self._removed_browser_account_ids.append(account_id)
+        if removed is not None:
+            self._removed_browser_accounts[account_id] = removed.kind
+        self._opencode_key_drafts.pop(account_id, None)
         self._rebuild_browser_account_rows()
+
+    def _capture_opencode_key_drafts(self) -> None:
+        for row in self._browser_account_rows:
+            if row.kind != "opencode_go" or row.api_key_edit is None:
+                continue
+            self._opencode_key_drafts[row.account_id] = (
+                row.api_key_edit.text(),
+                bool(
+                    row.clear_api_key_cb is not None
+                    and row.clear_api_key_cb.isChecked()
+                ),
+            )
 
     def _rebuild_browser_account_rows(self) -> None:
         for layout in (
@@ -1270,6 +1323,12 @@ class SettingsDialog(QDialog):
                 row.paste_cookie_clicked.connect(self.paste_cookie_clicked.emit)
                 row.clear_sign_in_clicked.connect(self.clear_sign_in_clicked.emit)
                 row.remove_clicked.connect(self._remove_browser_account)
+                if row.kind == "opencode_go" and row.api_key_edit is not None:
+                    draft = self._opencode_key_drafts.get(row.account_id)
+                    if draft is not None:
+                        row.api_key_edit.setText(draft[0])
+                        if row.clear_api_key_cb is not None:
+                            row.clear_api_key_cb.setChecked(draft[1])
                 self._browser_account_rows.append(row)
                 layout.addWidget(row)
             add_btn = QPushButton(f"Add another {provider_base_name(kind)}")
@@ -1432,6 +1491,76 @@ class SettingsDialog(QDialog):
                 return
             log.info("Saved OpenRouter management key to system keychain.")
 
+        for account_id, kind in self._removed_browser_accounts.items():
+            if kind != "opencode_go":
+                continue
+            try:
+                set_opencode_go_key(account_id, None)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(
+                    self,
+                    "OpenCode API key was not cleared",
+                    f"The saved key for {account_id} could not be cleared:\n{exc}",
+                )
+                return
+            if get_opencode_go_key(account_id):
+                QMessageBox.warning(
+                    self,
+                    "OpenCode API key was not cleared",
+                    f"The saved key for {account_id} still appears to be "
+                    "available in the system keychain.",
+                )
+                return
+
+        for row in self._browser_account_rows:
+            if row.kind != "opencode_go" or row.api_key_edit is None:
+                continue
+            new_key = row.api_key_edit.text().strip()
+            clear_key = bool(
+                row.clear_api_key_cb is not None
+                and row.clear_api_key_cb.isChecked()
+            )
+            if clear_key and not new_key:
+                try:
+                    set_opencode_go_key(row.account_id, None)
+                except Exception as exc:  # noqa: BLE001
+                    QMessageBox.warning(
+                        self,
+                        "OpenCode API key was not cleared",
+                        f"The saved key could not be cleared:\n{exc}",
+                    )
+                    return
+                if get_opencode_go_key(row.account_id):
+                    QMessageBox.warning(
+                        self,
+                        "OpenCode API key was not cleared",
+                        "The key still appears to be available in the system keychain.",
+                    )
+                    return
+            if new_key:
+                try:
+                    set_opencode_go_key(row.account_id, new_key)
+                except Exception as exc:  # noqa: BLE001
+                    QMessageBox.warning(
+                        self,
+                        "OpenCode API key was not saved",
+                        f"The system keychain rejected the key:\n{exc}",
+                    )
+                    return
+                if get_opencode_go_key(row.account_id) != new_key:
+                    QMessageBox.warning(
+                        self,
+                        "OpenCode API key was not saved",
+                        "The key could not be read back from the system keychain. "
+                        "Try running the app normally rather than as a different "
+                        "user/elevated account.",
+                    )
+                    return
+                log.info(
+                    "Saved OpenCode API key to system keychain for account=%s.",
+                    row.account_id,
+                )
+
         self.accept()
 
     def _set_quota_selection(self, quota: int) -> None:
@@ -1491,7 +1620,9 @@ class SettingsDialog(QDialog):
         config.providers.copilot = self.copilot_cb.isChecked()
         config.providers.openrouter = self.openrouter_cb.isChecked()
         config.providers.opencode_go = self.opencode_go_cb.isChecked()
-        for account_id in self._removed_browser_account_ids:
+        for account_id, kind in self._removed_browser_accounts.items():
+            if kind == "opencode_go":
+                continue
             try:
                 clear_browser_session(account_id)
             except RuntimeError as exc:
@@ -1519,9 +1650,6 @@ class SettingsDialog(QDialog):
             None,
         )
         if first_opencode is not None:
-            config.opencode_go.usage_url = (
-                first_opencode.usage_url or OPENCODE_GO_USAGE_URL
-            )
             config.opencode_go.colors = first_opencode.colors.model_copy(deep=True)
         self.local_usage_panel.apply_to(config)
         # Persist all settings first: wiring up OS autostart can fail (e.g. a
