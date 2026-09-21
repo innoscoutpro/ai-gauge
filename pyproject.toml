@@ -1,7 +1,7 @@
 [project]
 name = "ai-gauge"
 version = "0.8.4"
-description = "Compact always-on-top monitor for Claude.ai, ChatGPT Codex, and GitHub Copilot usage limits."
+description = "Compact cross-platform monitor for Claude, Codex, OpenCode Go, GitHub Copilot, and OpenRouter usage."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }

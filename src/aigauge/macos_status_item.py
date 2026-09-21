@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 
 from PyQt6.QtCore import QPoint
 
@@ -15,6 +16,7 @@ try:  # pragma: no cover - exercised only on macOS with PyObjC installed.
     import objc
     from AppKit import (
         NSApp,
+        NSBitmapImageFileTypePNG,
         NSColor,
         NSEventModifierFlagControl,
         NSEventMaskLeftMouseUp,
@@ -156,6 +158,24 @@ class NativeMacStatusItem:
         x = int(frame.origin.x + frame.size.width / 2)
         y = int(screen_frame.size.height - frame.origin.y)
         return QPoint(x, y)
+
+    def save_screenshot(self, path: str | Path) -> None:
+        """Render the native menu-bar button to PNG without capturing the screen."""
+        button = self._status_item.button()
+        window = button.window()
+        if window is not None:
+            window.displayIfNeeded()
+        bounds = button.bounds()
+        bitmap = button.bitmapImageRepForCachingDisplayInRect_(bounds)
+        if bitmap is None:
+            raise RuntimeError("macOS could not allocate a menu-bar screenshot")
+        button.cacheDisplayInRect_toBitmapImageRep_(bounds, bitmap)
+        data = bitmap.representationUsingType_properties_(
+            NSBitmapImageFileTypePNG,
+            {},
+        )
+        if data is None or not data.writeToFile_atomically_(str(Path(path)), True):
+            raise RuntimeError(f"Could not write menu-bar screenshot: {path}")
 
     def close(self) -> None:
         NSStatusBar.systemStatusBar().removeStatusItem_(self._status_item)

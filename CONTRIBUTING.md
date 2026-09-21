@@ -44,6 +44,23 @@ The version-sync check that gates CI:
 .\.venv\Scripts\python.exe tools\check_versions.py
 ```
 
+Refresh the deterministic README screenshots without using live accounts:
+
+```powershell
+.\.venv\Scripts\python.exe tools\capture_readme_screenshots.py
+```
+
+This updates the full and compact floating-widget images using fixed demo data.
+
+On a logged-in Mac, refresh the native menu-bar image with:
+
+```bash
+./.venv/bin/python tools/capture_macos_menubar.py
+```
+
+The command renders only AI Gauge's own menu-bar button with demo data, so it
+does not need Screen Recording permission or include other desktop content.
+
 ## Pull request expectations
 
 - Keep changes focused. One PR per logical change.
