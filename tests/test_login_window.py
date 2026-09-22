@@ -60,18 +60,6 @@ def test_logged_blocked_url_drops_query_and_fragment():
     assert _safe_url_for_log(url) == "https://accounts.google.com/o/oauth2/v2/auth"
 
 
-def test_opencode_go_has_verify_target():
-    url, check_js = VERIFY_TARGETS["opencode_go"]
-
-    assert url.startswith("https://opencode.ai/workspace/")
-    assert "location.hostname === 'opencode.ai'" in check_js
-    assert "workspacePath" in check_js
-    assert "'usage', 'api keys', 'members', 'billing', 'settings'" in check_js
-    assert "Rolling Usage" not in check_js
-    assert "Weekly Usage" not in check_js
-    assert "Monthly Usage" not in check_js
-
-
 def test_codex_verification_accepts_weekly_only_usage_page():
     _, check_js = VERIFY_TARGETS["codex"]
 

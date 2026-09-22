@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Removed the obsolete OpenCode browser-session, cookie-paste, and webpage-verification implementation. OpenCode usage now uses only the authenticated Go API introduced in 0.8.4, with a separate API key stored in the system credential store for each configured account. Claude and Codex browser sign-in are unchanged.
+
 ## 0.8.4 - 2026-09-19
 
 ### Changed

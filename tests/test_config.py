@@ -220,11 +220,12 @@ def test_opencode_keys_are_stored_per_account(monkeypatch):
     assert get_opencode_go_key("opencode_go-work") == "work-key"
 
 
-def test_load_corrupt_falls_back_to_defaults():
+def test_load_corrupt_falls_back_to_defaults(caplog):
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text("{ not valid json", encoding="utf-8")
     c = Config.load()
     assert c.refresh_interval_minutes == 60
+    assert "using defaults" in caplog.text
 
 
 def test_load_migrates_old_refresh_interval_to_active_rate():

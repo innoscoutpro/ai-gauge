@@ -70,19 +70,6 @@ def test_parse_codex_raw_value_uses_current_and_legacy_names():
         ("__Secure-next-auth.session-token", "single-token"),
     ]
 
-
-
-def test_parse_opencode_go_full_cookie_header_keeps_all_cookies():
-    pasted = "Cookie: auth=session; other=value"
-
-    assert _parse_cookie_pairs("opencode_go", pasted) == [
-        ("auth", "session"),
-        ("other", "value"),
-    ]
-
-
-def test_parse_opencode_go_rejects_bare_raw_value():
-    assert _parse_cookie_pairs("opencode_go", "raw-session-value") == []
 def test_parse_claude_raw_value():
     assert _parse_cookie_pairs("claude", "session-value") == [
         ("sessionKey", "session-value")
@@ -167,56 +154,6 @@ def test_import_browser_cookies_preserves_attributes_and_saves_fallback(monkeypa
             "codex-work",
             "__Secure-next-auth.session-token=session-secret",
         )
-    ]
-
-
-def test_import_browser_cookies_preserves_host_only_domains(monkeypatch):
-    imported = []
-    calls = []
-
-    class FakeStore:
-        def deleteAllCookies(self):  # noqa: N802 - Qt-shaped test double
-            calls.append("clear")
-
-        def setCookie(self, cookie, origin):  # noqa: N802 - Qt-shaped test double
-            calls.append("set")
-            imported.append((cookie, origin))
-
-    class FakeProfile:
-        def cookieStore(self):  # noqa: N802 - Qt-shaped test double
-            return FakeStore()
-
-    monkeypatch.setattr(cookies, "get_profile", lambda account_id: FakeProfile())
-    monkeypatch.setattr(cookies, "set_provider_cookie", lambda account_id, value: None)
-
-    assert cookies.import_browser_cookies(
-        "opencode_go",
-        "opencode_go",
-        [
-            {
-                "name": "auth",
-                "value": "session",
-                "domain": "opencode.ai",
-                "path": "/",
-                "secure": False,
-                "httpOnly": True,
-            },
-            {
-                "name": "provider",
-                "value": "oauth-provider",
-                "domain": "auth.opencode.ai",
-                "path": "/",
-                "secure": True,
-                "httpOnly": True,
-            },
-        ],
-    )
-
-    assert calls == ["clear", "set", "set"]
-    assert [cookie.domain() for cookie, _origin in imported] == ["", ""]
-    assert [origin.host() for _cookie, origin in imported] == [
-        "opencode.ai",
-        "auth.opencode.ai",
     ]
 
 

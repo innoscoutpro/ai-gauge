@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 
 from PyQt6.QtCore import QPointF, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import (
@@ -1365,151 +1366,142 @@ class SettingsDialog(QDialog):
             seen.add(key)
         return True
 
+    def _write_secret(
+        self,
+        value: str | None,
+        *,
+        setter: Callable[[str | None], None],
+        getter: Callable[[], str | None],
+        title: str,
+        write_error: str,
+        verify_error: str,
+    ) -> bool:
+        """Write a keychain secret and verify the backend accepted the change."""
+        try:
+            setter(value)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, title, f"{write_error}:\n{exc}")
+            return False
+
+        stored = getter()
+        verified = stored == value if value is not None else not stored
+        if not verified:
+            QMessageBox.warning(self, title, verify_error)
+            return False
+        return True
+
     def _accept(self) -> None:
         if not self._validate_browser_accounts():
             return
         new_pat = self.gh_pat_edit.text().strip()
         if self.clear_pat_cb.isChecked() and not new_pat:
-            try:
-                set_github_pat(None)
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.warning(
-                    self,
-                    "PAT was not cleared",
-                    f"The saved token could not be cleared:\n{exc}",
-                )
-                return
-            if get_github_pat():
-                QMessageBox.warning(
-                    self,
-                    "PAT was not cleared",
+            if not self._write_secret(
+                None,
+                setter=set_github_pat,
+                getter=get_github_pat,
+                title="PAT was not cleared",
+                write_error="The saved token could not be cleared",
+                verify_error=(
                     "The token still appears to be available after clearing. "
                     "Remove the 'ai-gauge' / 'github-pat' credential from "
-                    "your system keychain.",
-                )
+                    "your system keychain."
+                ),
+            ):
                 return
         if new_pat:
-            try:
-                set_github_pat(new_pat)
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.warning(
-                    self,
-                    "PAT was not saved",
-                    f"The system keychain rejected the token:\n{exc}",
-                )
-                return
-            if get_github_pat() != new_pat:
-                QMessageBox.warning(
-                    self,
-                    "PAT was not saved",
+            if not self._write_secret(
+                new_pat,
+                setter=set_github_pat,
+                getter=get_github_pat,
+                title="PAT was not saved",
+                write_error="The system keychain rejected the token",
+                verify_error=(
                     "The token could not be read back from the system "
                     "keychain. Try running the app normally rather than as a "
-                    "different user/elevated account.",
-                )
+                    "different user/elevated account."
+                ),
+            ):
                 return
             log.info("Saved GitHub PAT to system keychain.")
 
         new_or_key = self.or_key_edit.text().strip()
         if self.clear_or_key_cb.isChecked() and not new_or_key:
-            try:
-                set_openrouter_key(None)
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.warning(
-                    self,
-                    "OpenRouter inference key was not cleared",
-                    f"The saved key could not be cleared:\n{exc}",
-                )
-                return
-            if get_openrouter_key():
-                QMessageBox.warning(
-                    self,
-                    "OpenRouter inference key was not cleared",
+            if not self._write_secret(
+                None,
+                setter=set_openrouter_key,
+                getter=get_openrouter_key,
+                title="OpenRouter inference key was not cleared",
+                write_error="The saved key could not be cleared",
+                verify_error=(
                     "The key still appears to be available after clearing. "
                     "Remove the 'ai-gauge' / 'openrouter-key' credential from "
-                    "your system keychain.",
-                )
+                    "your system keychain."
+                ),
+            ):
                 return
         if new_or_key:
-            try:
-                set_openrouter_key(new_or_key)
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.warning(
-                    self,
-                    "OpenRouter inference key was not saved",
-                    f"The system keychain rejected the key:\n{exc}",
-                )
-                return
-            if get_openrouter_key() != new_or_key:
-                QMessageBox.warning(
-                    self,
-                    "OpenRouter inference key was not saved",
+            if not self._write_secret(
+                new_or_key,
+                setter=set_openrouter_key,
+                getter=get_openrouter_key,
+                title="OpenRouter inference key was not saved",
+                write_error="The system keychain rejected the key",
+                verify_error=(
                     "The key could not be read back from the system "
                     "keychain. Try running the app normally rather than as a "
-                    "different user/elevated account.",
-                )
+                    "different user/elevated account."
+                ),
+            ):
                 return
             log.info("Saved OpenRouter inference key to system keychain.")
 
         new_or_mgmt_key = self.or_mgmt_key_edit.text().strip()
         if self.clear_or_mgmt_key_cb.isChecked() and not new_or_mgmt_key:
-            try:
-                set_openrouter_mgmt_key(None)
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.warning(
-                    self,
-                    "OpenRouter management key was not cleared",
-                    f"The saved key could not be cleared:\n{exc}",
-                )
-                return
-            if get_openrouter_mgmt_key():
-                QMessageBox.warning(
-                    self,
-                    "OpenRouter management key was not cleared",
+            if not self._write_secret(
+                None,
+                setter=set_openrouter_mgmt_key,
+                getter=get_openrouter_mgmt_key,
+                title="OpenRouter management key was not cleared",
+                write_error="The saved key could not be cleared",
+                verify_error=(
                     "The key still appears to be available after clearing. "
                     "Remove the 'ai-gauge' / 'openrouter-mgmt-key' credential "
-                    "from your system keychain.",
-                )
+                    "from your system keychain."
+                ),
+            ):
                 return
         if new_or_mgmt_key:
-            try:
-                set_openrouter_mgmt_key(new_or_mgmt_key)
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.warning(
-                    self,
-                    "OpenRouter management key was not saved",
-                    f"The system keychain rejected the key:\n{exc}",
-                )
-                return
-            if get_openrouter_mgmt_key() != new_or_mgmt_key:
-                QMessageBox.warning(
-                    self,
-                    "OpenRouter management key was not saved",
+            if not self._write_secret(
+                new_or_mgmt_key,
+                setter=set_openrouter_mgmt_key,
+                getter=get_openrouter_mgmt_key,
+                title="OpenRouter management key was not saved",
+                write_error="The system keychain rejected the key",
+                verify_error=(
                     "The key could not be read back from the system "
                     "keychain. Try running the app normally rather than as a "
-                    "different user/elevated account.",
-                )
+                    "different user/elevated account."
+                ),
+            ):
                 return
             log.info("Saved OpenRouter management key to system keychain.")
 
         for account_id, kind in self._removed_browser_accounts.items():
             if kind != "opencode_go":
                 continue
-            try:
-                set_opencode_go_key(account_id, None)
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.warning(
-                    self,
-                    "OpenCode API key was not cleared",
-                    f"The saved key for {account_id} could not be cleared:\n{exc}",
-                )
-                return
-            if get_opencode_go_key(account_id):
-                QMessageBox.warning(
-                    self,
-                    "OpenCode API key was not cleared",
+            if not self._write_secret(
+                None,
+                setter=lambda value, account_id=account_id: set_opencode_go_key(
+                    account_id, value
+                ),
+                getter=lambda account_id=account_id: get_opencode_go_key(account_id),
+                title="OpenCode API key was not cleared",
+                write_error=f"The saved key for {account_id} could not be cleared",
+                verify_error=(
                     f"The saved key for {account_id} still appears to be "
-                    "available in the system keychain.",
-                )
+                    "available in the system keychain."
+                ),
+            ):
                 return
 
         for row in self._browser_account_rows:
@@ -1521,40 +1513,38 @@ class SettingsDialog(QDialog):
                 and row.clear_api_key_cb.isChecked()
             )
             if clear_key and not new_key:
-                try:
-                    set_opencode_go_key(row.account_id, None)
-                except Exception as exc:  # noqa: BLE001
-                    QMessageBox.warning(
-                        self,
-                        "OpenCode API key was not cleared",
-                        f"The saved key could not be cleared:\n{exc}",
-                    )
-                    return
-                if get_opencode_go_key(row.account_id):
-                    QMessageBox.warning(
-                        self,
-                        "OpenCode API key was not cleared",
-                        "The key still appears to be available in the system keychain.",
-                    )
+                if not self._write_secret(
+                    None,
+                    setter=lambda value, account_id=row.account_id: (
+                        set_opencode_go_key(account_id, value)
+                    ),
+                    getter=lambda account_id=row.account_id: (
+                        get_opencode_go_key(account_id)
+                    ),
+                    title="OpenCode API key was not cleared",
+                    write_error="The saved key could not be cleared",
+                    verify_error=(
+                        "The key still appears to be available in the system keychain."
+                    ),
+                ):
                     return
             if new_key:
-                try:
-                    set_opencode_go_key(row.account_id, new_key)
-                except Exception as exc:  # noqa: BLE001
-                    QMessageBox.warning(
-                        self,
-                        "OpenCode API key was not saved",
-                        f"The system keychain rejected the key:\n{exc}",
-                    )
-                    return
-                if get_opencode_go_key(row.account_id) != new_key:
-                    QMessageBox.warning(
-                        self,
-                        "OpenCode API key was not saved",
+                if not self._write_secret(
+                    new_key,
+                    setter=lambda value, account_id=row.account_id: (
+                        set_opencode_go_key(account_id, value)
+                    ),
+                    getter=lambda account_id=row.account_id: (
+                        get_opencode_go_key(account_id)
+                    ),
+                    title="OpenCode API key was not saved",
+                    write_error="The system keychain rejected the key",
+                    verify_error=(
                         "The key could not be read back from the system keychain. "
                         "Try running the app normally rather than as a different "
-                        "user/elevated account.",
-                    )
+                        "user/elevated account."
+                    ),
+                ):
                     return
                 log.info(
                     "Saved OpenCode API key to system keychain for account=%s.",

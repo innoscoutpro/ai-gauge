@@ -137,8 +137,6 @@ def _parse_cookie_pairs(provider: str, pasted: str) -> list[tuple[str, str]]:
     if "=" in cookie_text:
         keep_all = ";" in cookie_text
         all_pairs = _parse_name_value_pairs(cookie_text)
-        if provider == "opencode_go":
-            return all_pairs
         if keep_all and _has_auth_cookie(provider, all_pairs):
             parsed = all_pairs
         else:
@@ -151,9 +149,6 @@ def _parse_cookie_pairs(provider: str, pasted: str) -> list[tuple[str, str]]:
 
     if parsed:
         return parsed
-    if provider == "opencode_go":
-        return []
-
     return [(name, value) for name in raw_names]
 
 
@@ -166,11 +161,11 @@ def _set_cookie(kind: str, account_id: str, name: str, value: str) -> None:
         QByteArray(name.encode("utf-8")),
         QByteArray(value.strip().encode("utf-8")),
     )
-    if kind != "opencode_go" and not name.startswith("__Host-"):
+    if not name.startswith("__Host-"):
         cookie.setDomain(domain)
     cookie.setPath("/")
     cookie.setSecure(True)
-    cookie.setHttpOnly(kind != "opencode_go")
+    cookie.setHttpOnly(True)
     cookie.setExpirationDate(QDateTime.currentDateTime().addDays(_COOKIE_TTL_DAYS))
 
     # Origin URL must match the cookie domain (drop the leading dot).

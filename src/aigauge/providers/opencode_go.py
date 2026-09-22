@@ -188,31 +188,3 @@ class OpenCodeGoProvider(Provider):
                 )
 
         self._run_async(work, on_done)
-
-    def _run_async(
-        self,
-        work: Callable[[], UsageSnapshot],
-        on_done: Callable[[UsageSnapshot], None],
-    ) -> None:
-        from PyQt6.QtCore import QRunnable, QThreadPool
-
-        class _Worker(QRunnable):
-            def run(self_inner) -> None:  # noqa: N805
-                try:
-                    snapshot = work()
-                except Exception as exc:  # noqa: BLE001
-                    log.exception(
-                        "provider api diagnosis provider=%s "
-                        "classification=unexpected_exception type=%s",
-                        self._account_id,
-                        type(exc).__name__,
-                    )
-                    snapshot = UsageSnapshot(
-                        provider=self._account_id,
-                        status=SnapshotStatus.ERROR,
-                        error=str(exc),
-                    )
-                on_done(snapshot)
-
-        pool = self._pool or QThreadPool.globalInstance()
-        pool.start(_Worker())

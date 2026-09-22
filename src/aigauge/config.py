@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from pathlib import Path
@@ -10,6 +11,8 @@ import keyring
 from pydantic import BaseModel, Field
 
 from .platforms import APP_NAME, get_platform
+
+log = logging.getLogger("aigauge.config")
 
 KEYRING_SERVICE = "ai-gauge"
 KEYRING_GITHUB_PAT = "github-pat"
@@ -36,7 +39,6 @@ WINDOW_COLLAPSED_MIN_WIDTH = 150
 COOKIE_NAMES = {
     "claude": "sessionKey",
     "codex": "next-auth.session-token",
-    "opencode_go": "auth",
 }
 
 SnapCorner = Literal["top_left", "top_right", "bottom_left", "bottom_right"]
@@ -51,17 +53,13 @@ COOKIE_NAME_ALIASES = {
         "__Secure-next-auth.session-token.0",
         "__Secure-next-auth.session-token.1",
     ),
-    # OpenCode currently uses the host-only `auth` cookie on opencode.ai.
-    # Retain earlier observed names for compatibility with saved paste-cookie
-    # sessions. The paste flow still keeps the complete Cookie header because
-    # a session may need related cookies.
-    "opencode_go": ("auth", "opencode-session", "opencode.sid"),
 }
 COOKIE_DOMAINS = {
     "claude": ".claude.ai",
     "codex": ".chatgpt.com",
-    "opencode_go": ".opencode.ai",
 }
+
+
 def app_data_dir() -> Path:
     """Per-OS config / log / secrets directory.
 
@@ -240,6 +238,7 @@ class Config(BaseModel):
                 cls._migrate(data)
             return cls.model_validate(data)
         except Exception:
+            log.exception("Failed to load config from %s; using defaults.", path)
             return cls()
 
     @staticmethod

@@ -45,15 +45,4 @@ VERIFY_TARGETS = {
           return false;
         })()""",
     ),
-    "opencode_go": (
-        "https://opencode.ai/workspace/wrk_01KX3HT8MFWCMHR2289KGPZ1RD/go",
-        r"""(() => {
-          const visibleText = el => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
-          const text = visibleText(document.body).toLowerCase();
-          const workspacePath = /^\/workspace\/[^/]+(?:\/|$)/.test(location.pathname);
-          const shellMarkers = ['usage', 'api keys', 'members', 'billing', 'settings'];
-          return location.hostname === 'opencode.ai' && workspacePath &&
-            shellMarkers.every(marker => text.includes(marker));
-        })()""",
-    ),
 }

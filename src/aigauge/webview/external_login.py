@@ -22,14 +22,6 @@ from ..config import COOKIE_DOMAINS, COOKIE_NAME_ALIASES, app_data_dir
 log = logging.getLogger("aigauge.webview.external_login")
 
 _LOOPBACK_NO_PROXY = ["127.0.0.1", "localhost"]
-_OPENCODE_WORKSPACE_MARKERS = ("usage", "api keys", "members", "billing", "settings")
-_OPENCODE_PAGE_STATE_JS = r"""
-(() => ({
-  url: location.href,
-  body_text: ((document.body && document.body.innerText) || '').slice(0, 10000),
-}))()
-"""
-
 BROWSER_LABELS = {
     "chrome": "Google Chrome",
     "edge": "Microsoft Edge",
@@ -135,21 +127,6 @@ def _has_auth_cookie(provider: str, cookies: list[dict]) -> bool:
     if provider == "codex":
         return bool(names & aliases) or "__Secure-oai-is" in names
     return bool(names & aliases)
-
-
-def _opencode_workspace_shell_visible(url: str, body_text: str) -> bool:
-    """Whether an OpenCode page has reached its authenticated workspace shell."""
-    parsed = urlparse(url)
-    path_parts = [part for part in parsed.path.split("/") if part]
-    if (
-        parsed.scheme != "https"
-        or parsed.hostname != "opencode.ai"
-        or len(path_parts) < 2
-        or path_parts[0] != "workspace"
-    ):
-        return False
-    normalized = " ".join(body_text.lower().split())
-    return all(marker in normalized for marker in _OPENCODE_WORKSPACE_MARKERS)
 
 
 def _is_loopback_websocket_url(value: object, port: int) -> bool:
@@ -262,7 +239,6 @@ class ExternalLoginWorker(QThread):
         return {
             "claude": "Claude",
             "codex": "ChatGPT",
-            "opencode_go": "OpenCode",
         }.get(self._provider, self._provider)
 
     def _poll_for_session(self) -> None:
@@ -314,81 +290,7 @@ class ExternalLoginWorker(QThread):
             self._stop_event.wait(0.75)
 
     def _session_is_ready(self, cookies: list[dict]) -> bool:
-        if not _has_auth_cookie(self._provider, cookies):
-            return False
-        if self._provider == "opencode_go":
-            return self._opencode_workspace_ready()
-        return True
-
-    def _opencode_workspace_ready(self) -> bool:
-        """Confirm OpenCode rendered its signed-in shell, not just an OAuth cookie."""
-        if self._debug_port is None:
-            return False
-        try:
-            session = requests.Session()
-            session.trust_env = False
-            response = session.get(
-                f"http://127.0.0.1:{self._debug_port}/json/list",
-                timeout=0.5,
-            )
-            response.raise_for_status()
-            targets = response.json()
-        except (requests.RequestException, ValueError):
-            return False
-        if not isinstance(targets, list):
-            return False
-
-        for target in targets:
-            if not isinstance(target, dict) or target.get("type") != "page":
-                continue
-            target_url = str(target.get("url") or "")
-            parsed = urlparse(target_url)
-            if (
-                parsed.hostname != "opencode.ai"
-                or not parsed.path.startswith("/workspace/")
-            ):
-                continue
-            websocket_url = target.get("webSocketDebuggerUrl")
-            if not _is_loopback_websocket_url(websocket_url, self._debug_port):
-                continue
-            try:
-                connection = _create_websocket_connection(
-                    str(websocket_url),
-                    timeout=1.5,
-                )
-                try:
-                    connection.send(
-                        json.dumps(
-                            {
-                                "id": 3,
-                                "method": "Runtime.evaluate",
-                                "params": {
-                                    "expression": _OPENCODE_PAGE_STATE_JS,
-                                    "returnByValue": True,
-                                },
-                            }
-                        )
-                    )
-                    while True:
-                        payload = json.loads(connection.recv())
-                        if payload.get("id") == 3:
-                            break
-                finally:
-                    connection.close()
-            except Exception as exc:  # noqa: BLE001 - transient CDP state
-                log.debug("OpenCode workspace readiness check failed: %s", exc)
-                continue
-            value = (
-                payload.get("result", {})
-                .get("result", {})
-                .get("value", {})
-            )
-            if isinstance(value, dict) and _opencode_workspace_shell_visible(
-                str(value.get("url") or ""),
-                str(value.get("body_text") or ""),
-            ):
-                return True
-        return False
+        return _has_auth_cookie(self._provider, cookies)
 
     def _discover_websocket(self) -> bool:
         assert self._debug_port is not None

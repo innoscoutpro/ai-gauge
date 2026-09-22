@@ -16,7 +16,6 @@ try:  # pragma: no cover - exercised only on macOS with PyObjC installed.
     import objc
     from AppKit import (
         NSApp,
-        NSBitmapImageFileTypePNG,
         NSColor,
         NSEventModifierFlagControl,
         NSEventMaskLeftMouseUp,
@@ -161,6 +160,8 @@ class NativeMacStatusItem:
 
     def save_screenshot(self, path: str | Path) -> None:
         """Render the native menu-bar button to PNG without capturing the screen."""
+        from AppKit import NSBitmapImageFileTypePNG
+
         button = self._status_item.button()
         window = button.window()
         if window is not None:
