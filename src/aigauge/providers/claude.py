@@ -191,8 +191,10 @@ EXTRACTOR_JS = r"""
 
   const bodyText = (document.body.textContent || '').replace(/\s+/g, ' ').trim();
   const isLoggedOut =
-    !!document.querySelector('a[href*="/login"]') &&
-    !/Plan usage limits|Your usage/i.test(bodyText);
+    (location.hostname === 'claude.ai' &&
+      /^\/(?:login|logout)(?:\/|$)/.test(location.pathname)) ||
+    (!!document.querySelector('a[href*="/login"]') &&
+      !/Plan usage limits|Your usage/i.test(bodyText));
 
   const session = readRow(ROW_LABEL_GROUPS[0]);
   const weeklyAll = readRow(ROW_LABEL_GROUPS[1]);
