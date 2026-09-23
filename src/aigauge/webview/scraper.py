@@ -45,6 +45,19 @@ def _safe_url(value: Any) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))[:300]
 
 
+def _claude_auth_redirect(value: Any, provider: str) -> dict[str, Any] | None:
+    """Classify Claude's auth redirect even when the page load/JS failed."""
+    if provider != "claude" and not provider.startswith("claude-"):
+        return None
+    url = _safe_url(value)
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc != "claude.ai":
+        return None
+    if parsed.path.rstrip("/") not in ("/login", "/logout"):
+        return None
+    return {"logged_out": True, "url": url}
+
+
 class HeadlessScraper(QObject):
     """Load a page in an offscreen QWebEngineView, then evaluate JS to extract data.
 
@@ -208,7 +221,11 @@ class HeadlessScraper(QObject):
             self._last_load_is_error_page,
         )
         if not ok:
-            self._finish(None, "page failed to load")
+            auth = _claude_auth_redirect(self._page.url(), self._provider)
+            if auth is not None:
+                self._finish(auth, "")
+            else:
+                self._finish(None, "page failed to load")
             return
         # Page DOM may render asynchronously — give React a moment, then evaluate.
         QTimer.singleShot(self._wait_ms, self._run_extractor)
@@ -225,6 +242,10 @@ class HeadlessScraper(QObject):
             self._finish(None, "extractor returned null")
             return
         if isinstance(result, dict) and "__retry_after_ms" in result:
+            auth = _claude_auth_redirect(self._page.url(), self._provider)
+            if auth is not None:
+                self._finish(auth, "")
+                return
             self._extractor_reruns += 1
             if self._extractor_reruns > 5:
                 self._finish(None, "extractor retry limit exceeded")

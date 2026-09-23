@@ -93,6 +93,27 @@ def percents(result: dict) -> dict:
     }
 
 
+def test_login_route_without_login_link_reports_signed_out(tmp_path):
+    """Claude's /new → /logout → /login redirect must not loop back to /new."""
+    harness = tmp_path / "harness.js"
+    script = tmp_path / "extractor.js"
+    nodes = tmp_path / "nodes.json"
+    harness.write_text(
+        HARNESS.replace("https://claude.ai/new#settings/usage", "https://claude.ai/login")
+        .replace("pathname: '/new'", "pathname: '/login'")
+        .replace("hash: '#settings/usage'", "hash: ''"),
+        encoding="utf-8",
+    )
+    script.write_text(EXTRACTOR_JS, encoding="utf-8")
+    nodes.write_text(json.dumps([("Welcome back Sign in with Google", 900)]), encoding="utf-8")
+    result = json.loads(subprocess.check_output(
+        ["node", str(harness), str(nodes), str(script)], text=True
+    ))
+    assert result["logged_out"] is True
+    assert "__retry_after_ms" not in result
+    assert result["url"] == "https://claude.ai/login"
+
+
 def test_max_plan_layout_reads_all_three_rows(tmp_path):
     wrapper = " ".join(
         ["Plan usage limits Max (5x)", SESSION, "Weekly limits", BANNER, ALL_MODELS, FABLE]
