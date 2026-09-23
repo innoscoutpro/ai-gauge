@@ -114,6 +114,23 @@ def test_login_route_without_login_link_reports_signed_out(tmp_path):
     assert result["url"] == "https://claude.ai/login"
 
 
+def test_sign_in_page_on_new_route_reports_signed_out(tmp_path):
+    harness = tmp_path / "harness.js"
+    script = tmp_path / "extractor.js"
+    nodes = tmp_path / "nodes.json"
+    harness.write_text(
+        HARNESS.replace("title: 'Claude'", "title: 'Sign in - Claude'"),
+        encoding="utf-8",
+    )
+    script.write_text(EXTRACTOR_JS, encoding="utf-8")
+    nodes.write_text(json.dumps([("Welcome back Sign in with Google", 900)]), encoding="utf-8")
+    result = json.loads(subprocess.check_output(
+        ["node", str(harness), str(nodes), str(script)], text=True
+    ))
+    assert result["logged_out"] is True
+    assert "__retry_after_ms" not in result
+
+
 def test_max_plan_layout_reads_all_three_rows(tmp_path):
     wrapper = " ".join(
         ["Plan usage limits Max (5x)", SESSION, "Weekly limits", BANNER, ALL_MODELS, FABLE]

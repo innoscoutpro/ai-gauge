@@ -192,7 +192,8 @@ EXTRACTOR_JS = r"""
   const bodyText = (document.body.textContent || '').replace(/\s+/g, ' ').trim();
   const isLoggedOut =
     (location.hostname === 'claude.ai' &&
-      /^\/(?:login|logout)(?:\/|$)/.test(location.pathname)) ||
+      (/^\/(?:login|logout)(?:\/|$)/.test(location.pathname) ||
+        /^Sign in\s*[-–—]\s*Claude$/i.test(document.title))) ||
     (!!document.querySelector('a[href*="/login"]') &&
       !/Plan usage limits|Your usage/i.test(bodyText));
 
