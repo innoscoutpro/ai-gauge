@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Callable
 from urllib.parse import urlparse, urlunparse
@@ -45,7 +46,9 @@ def _safe_url(value: Any) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))[:300]
 
 
-def _claude_auth_redirect(value: Any, provider: str) -> dict[str, Any] | None:
+def _claude_auth_redirect(
+    value: Any, provider: str, title: str = ""
+) -> dict[str, Any] | None:
     """Classify Claude's auth redirect even when the page load/JS failed."""
     if provider != "claude" and not provider.startswith("claude-"):
         return None
@@ -53,7 +56,9 @@ def _claude_auth_redirect(value: Any, provider: str) -> dict[str, Any] | None:
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.netloc != "claude.ai":
         return None
-    if parsed.path.rstrip("/") not in ("/login", "/logout"):
+    auth_route = parsed.path.rstrip("/") in ("/login", "/logout")
+    sign_in_title = re.fullmatch(r"Sign in\s*[-–—]\s*Claude", title, re.IGNORECASE)
+    if not auth_route and sign_in_title is None:
         return None
     return {"logged_out": True, "url": url}
 
@@ -221,7 +226,7 @@ class HeadlessScraper(QObject):
             self._last_load_is_error_page,
         )
         if not ok:
-            auth = _claude_auth_redirect(self._page.url(), self._provider)
+            auth = _claude_auth_redirect(self._page.url(), self._provider, self._page.title())
             if auth is not None:
                 self._finish(auth, "")
             else:
@@ -242,7 +247,7 @@ class HeadlessScraper(QObject):
             self._finish(None, "extractor returned null")
             return
         if isinstance(result, dict) and "__retry_after_ms" in result:
-            auth = _claude_auth_redirect(self._page.url(), self._provider)
+            auth = _claude_auth_redirect(self._page.url(), self._provider, self._page.title())
             if auth is not None:
                 self._finish(auth, "")
                 return

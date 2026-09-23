@@ -33,6 +33,16 @@ def test_failed_load_on_claude_login_reports_auth_instead_of_transport_failure()
     assert scrape.result == ({"logged_out": True, "url": "https://claude.ai/login"}, "")
 
 
+def test_failed_load_on_sign_in_page_at_new_route_reports_auth():
+    scrape = _FailedLoginScrape()
+    scrape._page = type("Page", (), {
+        "url": lambda self: QUrl("https://claude.ai/new#settings/usage"),
+        "title": lambda self: "Sign in - Claude",
+    })()
+    HeadlessScraper._on_load_finished(cast(Any, scrape), False)
+    assert scrape.result == ({"logged_out": True, "url": "https://claude.ai/new"}, "")
+
+
 def test_failed_load_on_other_page_remains_transport_failure():
     scrape = _FailedLoginScrape()
     scrape._page = type("Page", (), {
