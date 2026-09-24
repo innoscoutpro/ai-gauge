@@ -63,6 +63,45 @@ def test_supported_browser_selection_is_explicit(monkeypatch, tmp_path):
     assert find_supported_browser("brave") is None
 
 
+def test_linux_snap_brave_launcher_is_detected(monkeypatch, tmp_path):
+    launcher = tmp_path / "brave"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(external_login.sys, "platform", "linux")
+    monkeypatch.setattr(
+        external_login.shutil,
+        "which",
+        lambda name: str(launcher) if name == "brave" else None,
+    )
+
+    assert installed_browsers()["brave"] == launcher
+    assert find_supported_browser("brave") == launcher
+
+
+def test_snap_brave_profile_uses_snap_writable_directory():
+    root = external_login._browser_profile_root(Path("/snap/bin/brave"))
+    assert root == Path.home() / "snap/brave/common/ai-gauge-signin"
+    assert external_login._browser_profile_root(Path("/usr/bin/brave-browser")) == (
+        external_login.app_data_dir() / "browser-signin"
+    )
+
+
+def test_snap_brave_profile_cleanup_stays_within_selected_root(tmp_path):
+    root = tmp_path / "snap" / "brave" / "common" / "ai-gauge-signin"
+    profile = root / "claude-123"
+    profile.mkdir(parents=True)
+    (profile / "SingletonLock").write_text("probe", encoding="utf-8")
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    worker = ExternalLoginWorker("claude", "https://claude.ai/login", "claude")
+    worker._profile_root = root
+    worker._profile_dir = profile
+
+    worker._cleanup_profile()
+
+    assert not profile.exists()
+    assert unrelated.exists()
+
+
 def test_websocket_connection_always_bypasses_loopback_proxies(monkeypatch):
     calls = []
     sentinel = object()
