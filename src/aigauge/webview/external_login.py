@@ -72,6 +72,7 @@ def _browser_candidates() -> list[tuple[str, Path]]:
         ("edge", "microsoft-edge"),
         ("edge", "microsoft-edge-stable"),
         ("brave", "brave-browser"),
+        ("brave", "brave"),  # Snap installs its launcher as /snap/bin/brave.
         ("chromium", "chromium"),
         ("chromium", "chromium-browser"),
     )
@@ -96,6 +97,13 @@ def find_supported_browser(browser_id: str | None = None) -> Path | None:
     if browser_id is not None:
         return browsers.get(browser_id)
     return next(iter(browsers.values()), None)
+
+
+def _browser_profile_root(browser: Path) -> Path:
+    """Snap Brave cannot write to AI Gauge's hidden config directory."""
+    if sys.platform.startswith("linux") and browser == Path("/snap/bin/brave"):
+        return Path.home() / "snap/brave/common/ai-gauge-signin"
+    return app_data_dir() / "browser-signin"
 
 
 def _reserve_local_port() -> int:
@@ -173,6 +181,7 @@ class ExternalLoginWorker(QThread):
         self._debug_port: int | None = None
         self._websocket_url: str | None = None
         self._profile_dir: Path | None = None
+        self._profile_root: Path | None = None
         self._stop_event = threading.Event()
 
     def run(self) -> None:
@@ -185,7 +194,8 @@ class ExternalLoginWorker(QThread):
             )
             return
 
-        profile_root = app_data_dir() / "browser-signin"
+        profile_root = _browser_profile_root(browser)
+        self._profile_root = profile_root
         try:
             profile_root.mkdir(parents=True, exist_ok=True)
             self._profile_dir = Path(
@@ -361,11 +371,15 @@ class ExternalLoginWorker(QThread):
 
     def _cleanup_profile(self) -> None:
         profile = self._profile_dir
+        root = self._profile_root
         self._profile_dir = None
+        self._profile_root = None
         if profile is None:
             return
         try:
-            profile.resolve().relative_to((app_data_dir() / "browser-signin").resolve())
+            if root is None:
+                raise ValueError("missing profile root")
+            profile.resolve().relative_to(root.resolve())
             for attempt in range(3):
                 shutil.rmtree(profile, ignore_errors=True)
                 if not profile.exists():
