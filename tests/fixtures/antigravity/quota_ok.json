@@ -1,0 +1,32 @@
+{
+  "conversation_id": "",
+  "status": "SUCCESS",
+  "response": "Gemini Models\tWeekly Limit Remaining\t87%\t2026-09-30T02:50:01Z\n",
+  "duration_seconds": 0,
+  "num_turns": 0,
+  "usage": {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0, "cache_read_tokens": 0, "total_tokens": 0},
+  "command": {
+    "name": "usage",
+    "data": {
+      "description": "Synthetic description of the quota groups.",
+      "groups": [
+        {
+          "name": "Gemini Models",
+          "description": "Synthetic group description.",
+          "buckets": [
+            {"id": "gemini-weekly", "name": "Weekly Limit Remaining", "description": "Synthetic bucket description.", "window": "weekly", "remaining_fraction": 0.868150532245636, "reset_time": "2026-09-30T02:50:01Z"},
+            {"id": "gemini-5h", "name": "Five Hour Limit Remaining", "description": "Synthetic bucket description.", "window": "5h", "remaining_fraction": 0.8503782749176025, "reset_time": "2026-09-26T05:57:59Z"}
+          ]
+        },
+        {
+          "name": "Claude and GPT models",
+          "description": "Synthetic group description.",
+          "buckets": [
+            {"id": "3p-weekly", "name": "Weekly Limit Remaining", "description": "Synthetic bucket description.", "window": "weekly", "remaining_fraction": 0.11492720246315002, "reset_time": "2026-09-27T09:34:11Z"},
+            {"id": "3p-5h", "name": "Five Hour Limit Remaining", "window": "5h", "remaining_fraction": 1, "reset_time": "2026-09-26T06:40:58Z"}
+          ]
+        }
+      ]
+    }
+  }
+}
