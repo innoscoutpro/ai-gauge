@@ -62,6 +62,7 @@ from .local_usage.settings_panel import LocalUsagePanel
 from .logging_setup import log_path
 from .providers.claude import CLAUDE_USAGE_URL
 from .providers.codex import CODEX_USAGE_URL
+from .providers.antigravity import resolve_cli
 from .startup import set_start_at_login
 from .webview.cookies import clear_browser_session  # lazy inside; no WebEngine at import
 
@@ -805,6 +806,10 @@ class SettingsDialog(QDialog):
         self.openrouter_cb.setToolTip("Show the OpenRouter usage tile in the panel.")
         self.openrouter_cb.setChecked(config.providers.openrouter)
         providers_layout.addWidget(self.openrouter_cb)
+        self.antigravity_cb = QCheckBox("Antigravity")
+        self.antigravity_cb.setToolTip("Show the Antigravity usage tile in the panel.")
+        self.antigravity_cb.setChecked(config.providers.antigravity)
+        providers_layout.addWidget(self.antigravity_cb)
 
         # ----- Claude accounts -----
         claude_accounts = QGroupBox("Claude Accounts")
@@ -1025,6 +1030,42 @@ class SettingsDialog(QDialog):
         self.openrouter_colors = _ColorThresholdLauncher(config.openrouter.colors)
         openrouter_form.addRow("Gauge colors:", self.openrouter_colors)
 
+        # ----- Antigravity details -----
+        antigravity = QGroupBox("Antigravity")
+        antigravity_form = QFormLayout(antigravity)
+        antigravity_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        antigravity_form.setHorizontalSpacing(12)
+        antigravity_form.setVerticalSpacing(8)
+        antigravity_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
+        self.antigravity_show_gemini_cb = QCheckBox("Gemini models")
+        self.antigravity_show_gemini_cb.setChecked(config.antigravity.show_gemini)
+        antigravity_form.addRow("Show:", self.antigravity_show_gemini_cb)
+        self.antigravity_show_third_party_cb = QCheckBox("Claude & GPT models")
+        self.antigravity_show_third_party_cb.setChecked(
+            config.antigravity.show_third_party
+        )
+        antigravity_form.addRow("", self.antigravity_show_third_party_cb)
+        try:
+            cli_path = resolve_cli(config.antigravity.cli_path)
+        except OSError:
+            cli_path = None
+        self.antigravity_cli_path_label = QLabel(cli_path or "agy CLI not found")
+        self.antigravity_cli_path_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        antigravity_form.addRow("agy CLI:", self.antigravity_cli_path_label)
+        antigravity_form.addRow(
+            "",
+            _hint_label(
+                "Usage comes from the local Antigravity CLI (agy --print /quota). "
+                "No account or API key is needed."
+            ),
+        )
+        self.antigravity_colors = _ColorThresholdLauncher(config.antigravity.colors)
+        antigravity_form.addRow("Gauge colors:", self.antigravity_colors)
+
         # ----- OpenCode accounts -----
         opencode_go = QGroupBox("OpenCode Accounts")
         opencode_go_layout = QVBoxLayout(opencode_go)
@@ -1078,6 +1119,13 @@ class SettingsDialog(QDialog):
         openrouter_tab_layout.addWidget(openrouter)
         openrouter_tab_layout.addStretch(1)
 
+        antigravity_tab = QWidget()
+        antigravity_tab_layout = QVBoxLayout(antigravity_tab)
+        antigravity_tab_layout.setContentsMargins(10, 10, 10, 10)
+        antigravity_tab_layout.setSpacing(10)
+        antigravity_tab_layout.addWidget(antigravity)
+        antigravity_tab_layout.addStretch(1)
+
         opencode_go_tab = QWidget()
         opencode_go_tab_layout = QVBoxLayout(opencode_go_tab)
         opencode_go_tab_layout.setContentsMargins(10, 10, 10, 10)
@@ -1113,6 +1161,8 @@ class SettingsDialog(QDialog):
             mcp_accounts.append(("copilot", "GitHub Copilot"))
         if config.providers.openrouter:
             mcp_accounts.append(("openrouter", "OpenRouter"))
+        if config.providers.antigravity:
+            mcp_accounts.append(("antigravity", "Antigravity"))
         for account_id, label in mcp_accounts:
             enabled = QCheckBox("Pause at")
             threshold = QSpinBox()
@@ -1151,6 +1201,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(opencode_go_tab, "OpenCode")
         tabs.addTab(copilot_tab, "GitHub Copilot")
         tabs.addTab(openrouter_tab, "OpenRouter")
+        tabs.addTab(antigravity_tab, "Antigravity")
         tabs.addTab(mcp_tab, "MCP")
         self.local_usage_panel = LocalUsagePanel(
             config, self._browser_accounts, local_usage_service
@@ -1230,6 +1281,7 @@ class SettingsDialog(QDialog):
             "opencode_go": 3,
             "copilot": 4,
             "openrouter": 5,
+            "antigravity": 6,
         }.get(kind)
         if tab_index is not None:
             self.tabs.setCurrentIndex(tab_index)
@@ -1599,6 +1651,8 @@ class SettingsDialog(QDialog):
             live_policy_ids.add("copilot")
         if self.openrouter_cb.isChecked():
             live_policy_ids.add("openrouter")
+        if self.antigravity_cb.isChecked():
+            live_policy_ids.add("antigravity")
         config.mcp_pause_policies = {
             account_id: threshold.value()
             for account_id, (enabled, threshold) in self.mcp_policy_controls.items()
@@ -1609,6 +1663,7 @@ class SettingsDialog(QDialog):
         config.providers.codex = self.codex_cb.isChecked()
         config.providers.copilot = self.copilot_cb.isChecked()
         config.providers.openrouter = self.openrouter_cb.isChecked()
+        config.providers.antigravity = self.antigravity_cb.isChecked()
         config.providers.opencode_go = self.opencode_go_cb.isChecked()
         for account_id, kind in self._removed_browser_accounts.items():
             if kind == "opencode_go":
@@ -1633,6 +1688,11 @@ class SettingsDialog(QDialog):
         budget = self.or_daily_budget.value()
         config.openrouter.daily_budget = budget if budget > 0 else None
         config.openrouter.colors = self.openrouter_colors.value()
+        config.antigravity.show_gemini = self.antigravity_show_gemini_cb.isChecked()
+        config.antigravity.show_third_party = (
+            self.antigravity_show_third_party_cb.isChecked()
+        )
+        config.antigravity.colors = self.antigravity_colors.value()
         # Keep the legacy singleton fields synchronized for downgrade safety;
         # account rows are the source of truth from schema version 2 onward.
         first_opencode = next(

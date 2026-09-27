@@ -81,7 +81,14 @@ MIN_LABEL_WIDTH = 56
 PACE_TICK_OVERHANG = 2
 CHIP_NOTCH_HEIGHT = 4
 CHIP_NOTCH_HALF_WIDTH = 3.5
-PROVIDER_ORDER = ("claude", "codex", "opencode_go", "copilot", "openrouter")
+PROVIDER_ORDER = (
+    "claude",
+    "codex",
+    "opencode_go",
+    "copilot",
+    "openrouter",
+    "antigravity",
+)
 COLLAPSED_MIN_HEIGHT = WINDOW_COLLAPSED_MIN_HEIGHT
 EXPANDED_MIN_WIDTH = WINDOW_MIN_WIDTH
 COLLAPSED_MIN_WIDTH = WINDOW_COLLAPSED_MIN_WIDTH

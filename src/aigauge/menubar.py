@@ -35,6 +35,7 @@ PROVIDER_LABELS = {
     "opencode_go": "Go",
     "copilot": "Cp",
     "openrouter": "OR",
+    "antigravity": "Ag",
 }
 
 OK_COLORS = {

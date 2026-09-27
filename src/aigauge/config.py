@@ -115,6 +115,7 @@ class ProviderToggles(BaseModel):
     codex: bool = True
     copilot: bool = True
     openrouter: bool = False
+    antigravity: bool = False
     opencode_go: bool = False
 
 
@@ -155,6 +156,13 @@ class CopilotConfig(BaseModel):
 class OpenRouterConfig(BaseModel):
     daily_budget: float | None = Field(default=None, ge=0)
     colors: ColorThresholds = Field(default_factory=ColorThresholds)
+
+
+class AntigravityConfig(BaseModel):
+    colors: ColorThresholds = Field(default_factory=ColorThresholds)
+    cli_path: str | None = None
+    show_gemini: bool = True
+    show_third_party: bool = True
 
 
 class OpenCodeGoConfig(BaseModel):
@@ -217,6 +225,7 @@ class Config(BaseModel):
     browser_accounts_version: int = 2
     copilot: CopilotConfig = Field(default_factory=CopilotConfig)
     openrouter: OpenRouterConfig = Field(default_factory=OpenRouterConfig)
+    antigravity: AntigravityConfig = Field(default_factory=AntigravityConfig)
     opencode_go: OpenCodeGoConfig = Field(default_factory=OpenCodeGoConfig)
     expanded_tiles: list[str] = Field(default_factory=list)
     collapsed_tiles: list[str] = Field(default_factory=list)
@@ -365,6 +374,7 @@ def provider_base_name(kind: str) -> str:
         "claude": "Claude",
         "codex": "Codex",
         "opencode_go": "OpenCode",
+        "antigravity": "Antigravity",
     }.get(kind, kind.title())
 
 
@@ -423,6 +433,7 @@ def display_name_for_account(config: Config, account_id: str) -> str:
         "codex": "Codex",
         "copilot": "Copilot",
         "openrouter": "OpenRouter",
+        "antigravity": "Antigravity",
         "opencode_go": "OpenCode",
     }.get(account_id, account_id)
 

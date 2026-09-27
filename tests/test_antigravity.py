@@ -61,7 +61,12 @@ def test_fixture_maps_metrics_in_group_and_window_order():
         timedelta(hours=5),
         timedelta(days=7),
     ]
-    assert all(metric.resets_at is not None for metric in snapshot.metrics)
+    assert snapshot.metrics[2].resets_at is None
+    assert snapshot.metrics[2].reset_label == "idle"
+    assert all(
+        metric.resets_at is not None for index, metric in enumerate(snapshot.metrics)
+        if index != 2
+    )
     assert snapshot.metrics[0].resets_at.tzinfo is None
     assert all(metric.tag is None for metric in snapshot.metrics)
     assert len(snapshot.raw["buckets"]) == 4
@@ -78,6 +83,38 @@ def test_bucket_without_description_is_parsed_and_integer_one_is_idle():
     assert metric.percent_used == 0
     assert metric.reset_label == "idle"
     assert metric.resets_at is None
+
+
+@pytest.mark.parametrize(
+    ("remaining", "expected_reset", "expected_label"),
+    [
+        (1, None, "idle"),
+        (0.75, datetime(2026, 10, 26, 6, 40, 58), None),
+    ],
+)
+def test_zero_usage_is_idle_but_used_limit_keeps_reset_time(
+    remaining, expected_reset, expected_label
+):
+    payload = _payload()
+    bucket = payload["command"]["data"]["groups"][1]["buckets"][1]
+    bucket["remaining_fraction"] = remaining
+    bucket["reset_time"] = "2026-10-26T06:40:58Z"
+
+    metric = next(
+        item
+        for item in _build_snapshot(payload).metrics
+        if item.label == "Claude+GPT 5h"
+    )
+
+    if expected_reset is None:
+        assert metric.resets_at is None
+    else:
+        assert metric.resets_at == antigravity._parse_reset_at(
+            bucket["reset_time"]
+        )
+    assert metric.reset_label == expected_label
+    if remaining == 1:
+        assert metric.note == "Countdown starts when you next use this limit."
 
 
 def test_unknown_window_and_group_prefix_use_fallback_labels():

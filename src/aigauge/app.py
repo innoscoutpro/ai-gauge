@@ -43,6 +43,7 @@ from .providers.claude import ClaudeProvider
 from .providers.codex import CodexProvider
 from .providers.copilot import CopilotProvider
 from .providers.openrouter import OpenRouterProvider
+from .providers.antigravity import AntigravityProvider
 from .providers.opencode_go import OpenCodeGoProvider
 from .ratio import RatioStore, sessions_per_week
 from .ratio_dialog import RatioHistoryDialog
@@ -100,6 +101,8 @@ def _enabled_providers(config: Config) -> tuple[str, ...]:
         out.append("copilot")
     if config.providers.openrouter:
         out.append("openrouter")
+    if getattr(config.providers, "antigravity", False):
+        out.append("antigravity")
     return tuple(out)
 
 
@@ -467,6 +470,15 @@ class App(QObject):
             self._providers["openrouter"] = OpenRouterProvider(self._config)
             desired_tiles.add("openrouter")
             self._widget.ensure_tile("openrouter", "OpenRouter")
+        if self._config.providers.antigravity:
+            antigravity = self._config.antigravity
+            self._providers["antigravity"] = AntigravityProvider(
+                cli_path=antigravity.cli_path,
+                show_gemini=antigravity.show_gemini,
+                show_third_party=antigravity.show_third_party,
+            )
+            desired_tiles.add("antigravity")
+            self._widget.ensure_tile("antigravity", "Antigravity")
         for tile_id in list(self._widget._tiles):  # noqa: SLF001
             if tile_id not in desired_tiles:
                 self._widget.remove_tile(tile_id)

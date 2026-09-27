@@ -57,6 +57,8 @@ def _configured_account_ids(config: Config) -> set[str]:
         account_ids.add("copilot")
     if config.providers.openrouter:
         account_ids.add("openrouter")
+    if config.providers.antigravity:
+        account_ids.add("antigravity")
     return account_ids
 
 

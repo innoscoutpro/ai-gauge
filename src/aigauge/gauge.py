@@ -73,6 +73,8 @@ def thresholds_for_provider(
         return config.copilot.colors
     if provider == "openrouter":
         return config.openrouter.colors
+    if provider == "antigravity":
+        return config.antigravity.colors
     if provider == "opencode_go":
         return config.opencode_go.colors
     return ColorThresholds()

@@ -182,6 +182,8 @@ def _build_snapshot(
             reset_label = None
             note = None
             if window is not None:
+                if percent == 0:
+                    resets_at = None
                 resets_at, reset_label, note = idle_reset_state(
                     percent=percent,
                     resets_at=resets_at,
