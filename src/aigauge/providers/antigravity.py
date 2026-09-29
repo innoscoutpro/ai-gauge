@@ -19,6 +19,10 @@ _LATCH_ERROR = (
     "agy did not treat /quota as a built-in command; polling paused to avoid "
     "spending model quota. Update agy and restart AI Gauge."
 )
+_AGY_ENV_OVERRIDES = {"AGY_CLI_DISABLE_AUTO_UPDATE": "true"}
+# agy's background updater can open an unhidden console on Windows; the value
+# must be "true" ("1" is ignored). This only affects AI Gauge quota calls,
+# leaving auto-updates enabled when users run agy themselves.
 
 
 def resolve_cli(cli_path: str | None) -> str | None:
@@ -40,6 +44,8 @@ def resolve_cli(cli_path: str | None) -> str | None:
 
 def _invoke_cli(exe: str) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as cwd:
+        env = os.environ.copy()
+        env.update(_AGY_ENV_OVERRIDES)
         return subprocess.run(
             [
                 exe,
@@ -61,6 +67,7 @@ def _invoke_cli(exe: str) -> subprocess.CompletedProcess[str]:
             timeout=60,
             cwd=cwd,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            env=env,
         )
 
 

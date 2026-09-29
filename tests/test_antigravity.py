@@ -297,6 +297,8 @@ def test_resolve_cli_uses_local_app_data_fallback_on_windows(monkeypatch, tmp_pa
 
 def test_invoke_cli_arguments_and_isolated_working_directory(monkeypatch):
     captured = {}
+    monkeypatch.delenv("AGY_CLI_DISABLE_AUTO_UPDATE", raising=False)
+    monkeypatch.setenv("AI_GAUGE_TEST_ENV", "preserved")
 
     def fake_run(args, **kwargs):
         captured["args"] = args
@@ -307,6 +309,7 @@ def test_invoke_cli_arguments_and_isolated_working_directory(monkeypatch):
 
     monkeypatch.setattr(antigravity.subprocess, "run", fake_run)
 
+    assert "AGY_CLI_DISABLE_AUTO_UPDATE" not in antigravity.os.environ
     _invoke_cli("agy-executable")
 
     assert captured["args"] == [
@@ -329,3 +332,6 @@ def test_invoke_cli_arguments_and_isolated_working_directory(monkeypatch):
     assert captured["encoding"] == "utf-8"
     assert captured["errors"] == "replace"
     assert captured["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert captured["env"]["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"
+    assert captured["env"]["AI_GAUGE_TEST_ENV"] == "preserved"
+    assert "AGY_CLI_DISABLE_AUTO_UPDATE" not in antigravity.os.environ
