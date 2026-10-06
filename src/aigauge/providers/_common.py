@@ -22,9 +22,9 @@ USAGE_PAGE_MARKERS = (
     "plan usage limits",
     "current session",
     "all models",
-    "5 hour usage limit",
-    "weekly usage limit",
-    "personal usage",
+    "plan limits",
+    "5-hour limit",
+    "weekly limit",
 )
 
 

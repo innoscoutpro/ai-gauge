@@ -2,9 +2,15 @@
 
 ## Unreleased
 
+## 0.8.5 - 2026-10-05
+
 ### Changed
 
 - Removed the obsolete OpenCode browser-session, cookie-paste, and webpage-verification implementation. OpenCode usage now uses only the authenticated Go API introduced in 0.8.4, with a separate API key stored in the system credential store for each configured account. Claude and Codex browser sign-in are unchanged.
+
+### Fixed
+
+- Restored Codex usage refreshes after ChatGPT moved usage settings to `chatgpt.com/settings/usage?tab=overview`. The collector now reads **5-hour limit**, **Weekly limit**, and **% left** from **Plan limits**, converts remaining allowance to usage, and handles reset countdowns such as **6d 10h**. It selects Overview if Analytics opens, ignores unrelated credit discounts and purchased resets, and updates sign-in verification and usage-page links to the new page.
 
 ## 0.8.4 - 2026-09-19
 

@@ -36,10 +36,10 @@ INSTRUCTIONS = {
     "codex": (
         "ChatGPT session cookie",
         f"""\
-1. Open <a style='color:#60a5fa;' href='https://chatgpt.com/codex/cloud/settings/analytics'>
-   chatgpt.com/codex/cloud/settings/analytics</a> in your normal browser.
+1. Open <a style='color:#60a5fa;' href='https://chatgpt.com/settings/usage?tab=overview'>
+   chatgpt.com/settings/usage?tab=overview</a> in your normal browser.
 2. Press <b>F12</b> → <b>Network</b>, then reload the page.
-3. Click a <code>chatgpt.com</code> request such as <code>analytics</code>,
+3. Click a <code>chatgpt.com</code> request such as <code>usage</code>,
    <code>backend-api</code>, or <code>accounts/check</code>.
 4. In <b>Headers</b> → <b>Request Headers</b>, copy the full
    <code>Cookie:</code> header and paste it below.

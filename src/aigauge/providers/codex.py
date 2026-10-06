@@ -18,16 +18,12 @@ from .base import Provider
 from .diagnostics import log_page_diagnosis
 from .idle import idle_reset_state
 
-CODEX_ANALYTICS_URL = "https://chatgpt.com/codex/cloud/settings/analytics"
-CODEX_USAGE_URL = f"{CODEX_ANALYTICS_URL}#personal-usage"
+CODEX_USAGE_URL = "https://chatgpt.com/settings/usage?tab=overview"
 _EXPECTED_ROWS = ("session", "weekly")
 log = logging.getLogger("aigauge.providers.codex")
 
-# Walks the rendered analytics page, finds the available "Balance" cards by
-# their headings, and reads the percentage + reset text out of each. The weekly
-# card is always required; the five-hour card is optional because Codex may
-# temporarily expose only the shared weekly agentic limit. Returns raw text
-# fragments so Python can do the unit-aware normalization.
+# Read only the Plan limits section: credits and purchased resets can contain
+# unrelated percentages and repeat the limit names.
 EXTRACTOR_JS = r"""
 (() => {
   function visibleText(el) {
@@ -35,28 +31,24 @@ EXTRACTOR_JS = r"""
   }
 
   function windowTextAfterLabel(label, nextLabels) {
-    const bodyText = visibleText(document.body);
-    const lowerText = bodyText.toLowerCase();
+    const lowerText = limitsText.toLowerCase();
     const start = lowerText.indexOf(label.toLowerCase());
     if (start < 0) return '';
-    let end = bodyText.length;
+    let end = limitsText.length;
     for (const nextLabel of nextLabels) {
       const candidate = lowerText.indexOf(nextLabel.toLowerCase(), start + label.length);
       if (candidate >= 0 && candidate < end) end = candidate;
     }
-    return bodyText.slice(start, end).trim();
+    return limitsText.slice(start, end).trim();
   }
 
-  function maybeSelectPersonalUsageTab(bodyText) {
-    if (/Weekly usage limit/i.test(bodyText) && /\d+(?:\.\d+)?\s*%/.test(bodyText)) {
+  function maybeSelectOverviewTab() {
+    if (/Weekly limit/i.test(limitsText) && /\d+(?:\.\d+)?\s*%/.test(limitsText)) {
       return null;
     }
 
-    // Only interactive elements are tabs. The current analytics page uses
-    // "Personal usage" as a heading inside a plain div; clicking that wrapper
-    // forever would exhaust the extractor's retry budget.
     const labels = Array.from(document.querySelectorAll('button,a,[role="tab"],[role="button"]'));
-    const label = labels.find(el => visibleText(el).toLowerCase() === 'personal usage');
+    const label = labels.find(el => visibleText(el).toLowerCase() === 'overview');
     if (!label) return null;
 
     const target = label.closest('button,a,[role="tab"],[role="button"]') || label;
@@ -64,68 +56,34 @@ EXTRACTOR_JS = r"""
       target.getAttribute('aria-selected') === 'true' ||
       target.getAttribute('data-state') === 'active' ||
       /\bactive\b|\bselected\b/.test(String(target.className || ''));
-    if (selected) return 'waiting for personal usage cards';
+    if (selected) return 'waiting for plan limits';
 
     target.click();
-    return 'selected personal usage tab';
-  }
-
-  function findCardByLabel(label) {
-    const candidates = Array.from(document.querySelectorAll('article,section,[role="group"],div,li'))
-      .map(el => {
-        const text = visibleText(el);
-        return { el, text };
-      })
-      .filter(({ text }) => {
-        const lower = text.toLowerCase();
-        return lower.includes(label.toLowerCase()) && /%/.test(text) && text.length < 1600;
-      })
-      .sort((a, b) => {
-        const score = item =>
-          (item.el.tagName.toLowerCase() === 'article' ? -1000 : 0) +
-          (/reset/i.test(item.text) ? -100 : 0) +
-          item.text.length;
-        return score(a) - score(b);
-      });
-    if (candidates.length) return candidates[0].el;
-
-    const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,div,span,p'));
-    const heading = headings.find(el => {
-      const t = visibleText(el);
-      return t === label || t.toLowerCase() === label.toLowerCase();
-    });
-    if (!heading) return null;
-    let card = heading;
-    for (let i = 0; i < 6 && card.parentElement; i++) {
-      card = card.parentElement;
-      const txt = visibleText(card);
-      if (/%/.test(txt)) return card;
-    }
-    return null;
+    return 'selected overview tab';
   }
 
   function readCard(label, nextLabels) {
-    const card = findCardByLabel(label);
-    const text = card ? visibleText(card) : windowTextAfterLabel(label, nextLabels);
+    const text = windowTextAfterLabel(label, nextLabels);
     if (!text) return null;
-    const pctMatch = text.match(/(\d+(?:\.\d+)?)\s*%/);
-    const remaining = /remaining/i.test(text);
-    const used = /used/i.test(text);
-    const resetMatch = text.match(/Resets?\s+(?:(?:at|on|in)\s+)?(.+?)(?=\s*$|\s+(?:Daily|Weekly|All|Current|Personal|Team|5 hour)\b|\s+\d+(?:\.\d+)?\s*%)/i);
+    const pctMatch = text.match(/(\d+(?:\.\d+)?)\s*%\s*left\b/i);
+    if (!pctMatch) return null;
+    const resetMatch = text.match(/Resets?\s+(?:(?:at|on|in)\s+)?(.+?)(?=\s*$|\s+\d+(?:\.\d+)?\s*%)/i);
     return {
       raw: text.slice(0, 400),
-      percent: pctMatch ? parseFloat(pctMatch[1]) : null,
-      kind: remaining ? 'remaining' : (used ? 'used' : 'unknown'),
+      percent: parseFloat(pctMatch[1]),
+      kind: 'remaining',
       reset_text: resetMatch ? resetMatch[1].trim() : null,
     };
   }
 
   const bodyText = visibleText(document.body);
-  const personalTabReason = maybeSelectPersonalUsageTab(bodyText);
-  if (personalTabReason) {
+  const limitsText = bodyText.split(/\bPlan limits\b/i).pop()
+    .split(/\bCredits\b|\bUsage limit resets\b|\bCredit usage history\b/i)[0];
+  const overviewReason = maybeSelectOverviewTab();
+  if (overviewReason) {
     return {
       __retry_after_ms: 1200,
-      __retry_reason: personalTabReason,
+      __retry_reason: overviewReason,
       logged_out: false,
       session: null,
       weekly: null,
@@ -141,15 +99,15 @@ EXTRACTOR_JS = r"""
     location.pathname.includes('/auth/login') ||
     location.pathname === '/login' ||
     document.title.toLowerCase().includes('login') ||
-    (/log in|sign in/.test(lowerText) && !/usage limit/i.test(bodyText));
+    (/log in|sign in/.test(lowerText) && !/Plan limits/i.test(bodyText));
   return {
     logged_out: isLoggedOut,
-    session: readCard('5 hour usage limit', ['Weekly usage limit']),
-    weekly: readCard('Weekly usage limit', ['Personal usage', 'Team usage']),
+    session: readCard('5-hour limit', ['Weekly limit']),
+    weekly: readCard('Weekly limit', []),
     url: location.href,
     title: document.title,
     has_percent_text: /%/.test(bodyText),
-    has_usage_text: /usage limit/i.test(bodyText),
+    has_usage_text: /Plan limits/i.test(bodyText),
     body_text: bodyText.slice(0, 2000),
   };
 })();
@@ -178,7 +136,7 @@ _WEEKDAYS = {
 
 
 def _parse_reset_text(text: str | None) -> datetime | None:
-    """Best-effort parse of strings like 'Mon 6:00 PM', '1:55 PM', or '2h 59m'."""
+    """Parse a relative countdown or an absolute reset time."""
     if not text:
         return None
     text = text.strip().rstrip(".")
@@ -186,17 +144,18 @@ def _parse_reset_text(text: str | None) -> datetime | None:
     text = re.sub(r"\s+at\s+", " ", text, count=1, flags=re.IGNORECASE)
     now = datetime.now()
 
-    # Relative: "in 2 hr 59 min", "2h 59m", "6 hr 29 min"
-    rel = re.match(
-        r"(?:in\s+)?(?:(\d+)\s*(?:hr|h|hour)s?)?\s*(?:(\d+)\s*(?:min|m|minute)s?)?",
+    # Overview renders day-aware countdowns such as "6d 10h" and "5h 0m".
+    rel = re.fullmatch(
+        r"(?:in\s+)?(?:(\d+)\s*(?:days?|d))?\s*"
+        r"(?:(\d+)\s*(?:hours?|hrs?|h))?\s*"
+        r"(?:(\d+)\s*(?:minutes?|mins?|m))?\s*"
+        r"(?:(\d+)\s*(?:seconds?|secs?|s))?",
         text,
         re.IGNORECASE,
     )
-    if rel and (rel.group(1) or rel.group(2)):
-        hours = int(rel.group(1) or 0)
-        minutes = int(rel.group(2) or 0)
-        if hours or minutes:
-            return now + timedelta(hours=hours, minutes=minutes)
+    if rel and any(group is not None for group in rel.groups()):
+        days, hours, minutes, seconds = (int(group or 0) for group in rel.groups())
+        return now + timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
 
     # Absolute date+time: "Apr 29, 2026 8:53 AM"
     for fmt in ("%b %d, %Y %I:%M %p", "%b %d %I:%M %p", "%B %d, %Y %I:%M %p"):
@@ -239,9 +198,9 @@ def _parse_reset_text(text: str | None) -> datetime | None:
     return None
 
 
-def _is_codex_analytics_url(url: str) -> bool:
+def _is_codex_usage_url(url: str) -> bool:
     normalized = url.split("?", maxsplit=1)[0].split("#", maxsplit=1)[0]
-    return normalized == CODEX_ANALYTICS_URL
+    return normalized == CODEX_USAGE_URL.split("?", maxsplit=1)[0]
 
 
 def _payload_has_usage_signal(payload: dict[str, Any]) -> bool:
@@ -251,12 +210,23 @@ def _payload_has_usage_signal(payload: dict[str, Any]) -> bool:
     return "%" in page_text or "usage limit" in page_text or "usage" in page_text
 
 
+def _plan_limits_text(body_text: str) -> str:
+    text = re.sub(r"\s+", " ", body_text or "").strip()
+    text = re.split(r"\bPlan limits\b", text, flags=re.IGNORECASE)[-1]
+    return re.split(
+        r"\bCredits\b|\bUsage limit resets\b|\bCredit usage history\b",
+        text,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+
 def _parse_body_card(
     body_text: str,
     label: str,
     next_labels: tuple[str, ...] = (),
 ) -> dict[str, Any] | None:
-    text = re.sub(r"\s+", " ", body_text or "").strip()
+    text = _plan_limits_text(body_text)
     lower_text = text.lower()
     start = lower_text.find(label.lower())
     if start < 0:
@@ -268,28 +238,26 @@ def _parse_body_card(
         if candidate >= 0:
             end = min(end, candidate)
     window = text[start:end].strip()
-    pct_match = re.search(r"(\d+(?:\.\d+)?)\s*%", window)
+    pct_match = re.search(r"(\d+(?:\.\d+)?)\s*%\s*left\b", window, re.IGNORECASE)
     if not pct_match:
         return None
 
     reset_match = re.search(
-        r"Resets?\s+(?:(?:at|on|in)\s+)?(.+?)(?=\s*$|\s+(?:Daily|Weekly|All|Current|Personal|Team|5 hour)\b|\s+\d+(?:\.\d+)?\s*%)",
+        r"Resets?\s+(?:(?:at|on|in)\s+)?(.+?)(?=\s*$|\s+\d+(?:\.\d+)?\s*%)",
         window,
         re.IGNORECASE,
     )
-    remaining = re.search(r"\bremaining\b", window, re.IGNORECASE)
-    used = re.search(r"\bused\b", window, re.IGNORECASE)
     return {
         "raw": window[:400],
         "percent": float(pct_match.group(1)),
-        "kind": "remaining" if remaining else ("used" if used else "unknown"),
+        "kind": "remaining",
         "reset_text": reset_match.group(1).strip() if reset_match else None,
     }
 
 
 def _looks_like_empty_signed_in_usage(payload: dict[str, Any]) -> bool:
     url = str(payload.get("url") or "")
-    if not _is_codex_analytics_url(url):
+    if not _is_codex_usage_url(url):
         return False
     if _payload_has_usage_signal(payload):
         return False
@@ -298,17 +266,14 @@ def _looks_like_empty_signed_in_usage(payload: dict[str, Any]) -> bool:
 
 
 def _is_weekly_only_usage_layout(body_text: str) -> bool:
-    """Return whether Codex rendered the newer shared weekly-limit layout."""
+    """Some plans have a weekly limit without a five-hour limit."""
     text = re.sub(r"\s+", " ", body_text or "").lower()
-    if "weekly usage limit" not in text:
-        return False
-    return any(
-        marker in text
-        for marker in (
-            "shared agentic usage limit",
-            "credits remaining",
-            "usage breakdown",
-        )
+    limits_text = _plan_limits_text(text)
+    return (
+        "plan limits" in text
+        and "shared across" in limits_text
+        and "weekly limit" in limits_text
+        and "5-hour limit" not in limits_text
     )
 
 
@@ -360,8 +325,8 @@ def _build_snapshot(
     metrics: list[UsageMetric] = []
     body_text = str(payload.get("body_text") or "")
     for key, label, source_label, next_labels in (
-        ("session", "Session", "5 hour usage limit", ("Weekly usage limit",)),
-        ("weekly", "Weekly", "Weekly usage limit", ("Personal usage", "Team usage")),
+        ("session", "Session", "5-hour limit", ("Weekly limit",)),
+        ("weekly", "Weekly", "Weekly limit", ()),
     ):
         card = payload.get(key) or _parse_body_card(
             body_text,
@@ -391,9 +356,7 @@ def _build_snapshot(
         )
 
     labels = {metric.label.lower(): metric for metric in metrics}
-    # Accept a lone Weekly card only when the surrounding page identifies the
-    # new shared-agentic layout. This preserves transient-error retries for a
-    # genuinely partial render of the older Session + Weekly layout.
+    # A five-hour heading without data means the Overview is still loading.
     weekly_only_layout = (
         set(labels) == {"weekly"} and _is_weekly_only_usage_layout(body_text)
     )
@@ -426,7 +389,7 @@ def _build_snapshot(
             return UsageSnapshot(
                 provider=account_id,
                 status=SnapshotStatus.ERROR,
-                error="Codex analytics loaded without usage cards; retrying.",
+                error="ChatGPT usage Overview loaded without plan limits; retrying.",
                 raw=payload,
             )
         log_page_diagnosis(
@@ -468,7 +431,7 @@ class CodexProvider(Provider):
         cache_buster = int(datetime.now().timestamp())
         self._runner = ScrapeRunner(
             account_id=self._account_id,
-            url=f"{CODEX_ANALYTICS_URL}?aigauge_ts={cache_buster}#personal-usage",
+            url=f"{CODEX_USAGE_URL}&aigauge_ts={cache_buster}",
             extractor_js=EXTRACTOR_JS,
             build=_build,
             log=log,

@@ -20,7 +20,7 @@ def table(tmp_path):
 
 
 def test_bundled_table_loads_with_sources(table):
-    assert table.version == "2026-09-14"
+    assert table.version == "2026-09-26"
     assert not table.errors
     opus = table.rates_for("claude-opus-5")
     assert opus.source.startswith("https://")
@@ -34,6 +34,17 @@ def test_all_five_categories_are_priced(table):
     )
     # 5 + 25 + 0.5 + 6.25 + 10; reasoning is part of output and not priced again
     assert table.cost("claude-opus-5", "", tokens) == pytest.approx(46.75)
+
+
+def test_opus_5_5_standard_and_fast_prices(table):
+    tokens = TokenCounts(
+        input=MILLION, output=MILLION, cache_read=MILLION,
+        cache_write_5m=MILLION, cache_write_1h=MILLION,
+    )
+    assert table.cost("claude-opus-5-5", "", tokens) == pytest.approx(37.2)
+    assert table.cost("claude-opus-5-5", "fast", tokens) == pytest.approx(74.4)
+    assert table.cost("claude-opus-5-5", "fast+long", tokens) == pytest.approx(74.4)
+    assert table.cost("claude-opus-5-5-20260922", "", tokens) == pytest.approx(37.2)
 
 
 def test_fast_variant_uses_fast_rates(table):

@@ -26,7 +26,10 @@ def _run_target_js(tmp_path, provider: str, state: dict) -> bool:
         """
 const fs = require('fs');
 const state = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-global.document = {body: {innerText: state.body}, title: state.title};
+global.document = {
+  body: {innerText: state.body}, title: state.title,
+  querySelectorAll: () => [],
+};
 global.location = state.location;
 const result = eval(fs.readFileSync(process.argv[3], 'utf8'));
 process.stdout.write(JSON.stringify(result));
@@ -60,16 +63,20 @@ def test_logged_blocked_url_drops_query_and_fragment():
     assert _safe_url_for_log(url) == "https://accounts.google.com/o/oauth2/v2/auth"
 
 
-def test_codex_verification_accepts_weekly_only_usage_page():
-    _, check_js = VERIFY_TARGETS["codex"]
-
-    success_check = check_js.split("return true", maxsplit=1)[0]
-    assert "/Weekly usage limit/i.test(text)" in success_check
-    assert "/5 hour usage limit/i.test(text)" not in success_check
-    assert (
-        """querySelectorAll('button,a,[role="tab"],[role="button"]')""" in check_js
-    )
-    assert ",div,span,p" not in check_js
+@pytest.mark.parametrize(("body", "expected"), [
+    ("Plan limits Weekly limit Resets in 6d 10h 96% left Credits 0", True),
+    ("Plan limits 5-hour limit 100% left Weekly limit 96% left", True),
+    ("Plan limits Weekly limit Credits Up to 40% off", False),
+    ("Usage Overview Analytics Usage history Plan usage By product", False),
+    ("Log in to ChatGPT", False),
+])
+def test_codex_verification_reads_overview_limits(tmp_path, body, expected):
+    assert VERIFY_TARGETS["codex"][0] == "https://chatgpt.com/settings/usage?tab=overview"
+    state = {
+        "body": body, "title": "ChatGPT",
+        "location": {"hostname": "chatgpt.com", "pathname": "/settings/usage"},
+    }
+    assert _run_target_js(tmp_path, "codex", state) is expected
 
 
 def test_claude_verification_accepts_authenticated_home_shell(tmp_path):

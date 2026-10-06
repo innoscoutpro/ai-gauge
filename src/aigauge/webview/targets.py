@@ -31,15 +31,17 @@ VERIFY_TARGETS = {
         })()""",
     ),
     "codex": (
-        "https://chatgpt.com/codex/cloud/settings/analytics#personal-usage",
+        "https://chatgpt.com/settings/usage?tab=overview",
         r"""(() => {
           const visibleText = el => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
           const text = visibleText(document.body);
-          if (/Weekly usage limit/i.test(text) && /\d+(?:\.\d+)?\s*%/.test(text)) {
+          const limitsText = text.split(/\bPlan limits\b/i).pop()
+            .split(/\bCredits\b|\bUsage limit resets\b|\bCredit usage history\b/i)[0];
+          if (/Weekly limit/i.test(limitsText) && /\d+(?:\.\d+)?\s*%\s*left\b/i.test(limitsText)) {
             return true;
           }
           const labels = Array.from(document.querySelectorAll('button,a,[role="tab"],[role="button"]'));
-          const label = labels.find(el => visibleText(el).toLowerCase() === 'personal usage');
+          const label = labels.find(el => visibleText(el).toLowerCase() === 'overview');
           const target = label && (label.closest('button,a,[role="tab"],[role="button"]') || label);
           if (target) target.click();
           return false;

@@ -1,9 +1,18 @@
 {
-  "version": "2026-09-14",
+  "version": "2026-09-26",
   "currency": "USD",
   "unit": "per million tokens",
   "notes": "Standard-tier API prices. A model's `variants` hold the full price set for fast mode and for prompts above the long-context threshold. A long-context bucket on a model with no `long` variant is priced at base rates (no surcharge). Any other missing variant is unpriced. OpenAI models before GPT-5.6 have no cache-write charge, so cache writes are priced as input.",
   "models": {
+    "claude-opus-5-5": {
+      "provider": "anthropic",
+      "rates": {"input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write_5m": 5.0, "cache_write_1h": 8.0},
+      "variants": {
+        "fast": {"input": 8.0, "output": 40.0, "cache_read": 0.4, "cache_write_5m": 10.0, "cache_write_1h": 16.0}
+      },
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-09-26"
+    },
     "claude-opus-5": {
       "provider": "anthropic",
       "rates": {"input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write_5m": 6.25, "cache_write_1h": 10.0},
