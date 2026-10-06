@@ -4,6 +4,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlparse
 
 from PyQt6.QtCore import QObject
 
@@ -20,6 +21,7 @@ from .idle import idle_reset_state
 
 CODEX_ANALYTICS_URL = "https://chatgpt.com/codex/cloud/settings/analytics"
 CODEX_USAGE_URL = f"{CODEX_ANALYTICS_URL}#personal-usage"
+CODEX_OVERVIEW_URL = "https://chatgpt.com/settings/usage?tab=overview"
 _EXPECTED_ROWS = ("session", "weekly")
 log = logging.getLogger("aigauge.providers.codex")
 
@@ -186,6 +188,17 @@ def _parse_reset_text(text: str | None) -> datetime | None:
     text = re.sub(r"\s+at\s+", " ", text, count=1, flags=re.IGNORECASE)
     now = datetime.now()
 
+    overview_relative = re.fullmatch(
+        r"(?:in\s+)?(\d+)\s*(?:d|days?)(?:\s+(\d+)\s*(?:h|hours?))?",
+        text,
+        re.IGNORECASE,
+    )
+    if overview_relative:
+        return now + timedelta(
+            days=int(overview_relative.group(1)),
+            hours=int(overview_relative.group(2) or 0),
+        )
+
     # Relative: "in 2 hr 59 min", "2h 59m", "6 hr 29 min"
     rel = re.match(
         r"(?:in\s+)?(?:(\d+)\s*(?:hr|h|hour)s?)?\s*(?:(\d+)\s*(?:min|m|minute)s?)?",
@@ -242,6 +255,38 @@ def _parse_reset_text(text: str | None) -> datetime | None:
 def _is_codex_analytics_url(url: str) -> bool:
     normalized = url.split("?", maxsplit=1)[0].split("#", maxsplit=1)[0]
     return normalized == CODEX_ANALYTICS_URL
+
+
+def _is_codex_overview_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == "chatgpt.com"
+        and parsed.path == "/settings/usage"
+        and parse_qs(parsed.query).get("tab") == ["overview"]
+    )
+
+
+def _parse_overview_weekly_card(payload: dict[str, Any]) -> dict[str, Any] | None:
+    if not _is_codex_overview_url(str(payload.get("url") or "")):
+        return None
+    text = re.sub(r"\s+", " ", str(payload.get("body_text") or ""))
+    if not re.search(r"\bPlan limits\b", text, re.IGNORECASE):
+        return None
+    match = re.search(
+        r"\bWeekly limit\b\s+Resets?\s+(?:in\s+)?(.{1,80}?)\s+"
+        r"(\d+(?:\.\d+)?)\s*%\s*left\b",
+        text,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "raw": match.group(0),
+        "percent": float(match.group(2)),
+        "kind": "remaining",
+        "reset_text": match.group(1).strip(),
+    }
 
 
 def _payload_has_usage_signal(payload: dict[str, Any]) -> bool:
@@ -359,11 +404,12 @@ def _build_snapshot(
 
     metrics: list[UsageMetric] = []
     body_text = str(payload.get("body_text") or "")
+    overview_weekly = _parse_overview_weekly_card(payload)
     for key, label, source_label, next_labels in (
         ("session", "Session", "5 hour usage limit", ("Weekly usage limit",)),
         ("weekly", "Weekly", "Weekly usage limit", ("Personal usage", "Team usage")),
     ):
-        card = payload.get(key) or _parse_body_card(
+        card = payload.get(key) or (overview_weekly if key == "weekly" else None) or _parse_body_card(
             body_text,
             source_label,
             next_labels,
@@ -395,7 +441,8 @@ def _build_snapshot(
     # new shared-agentic layout. This preserves transient-error retries for a
     # genuinely partial render of the older Session + Weekly layout.
     weekly_only_layout = (
-        set(labels) == {"weekly"} and _is_weekly_only_usage_layout(body_text)
+        set(labels) == {"weekly"}
+        and (overview_weekly is not None or _is_weekly_only_usage_layout(body_text))
     )
     if metrics and set(labels) != {"session", "weekly"} and not weekly_only_layout:
         log_page_diagnosis(
@@ -465,10 +512,9 @@ class CodexProvider(Provider):
         def _build(payload: dict[str, Any]) -> UsageSnapshot:
             return _build_snapshot(payload, account_id=self._account_id)
 
-        cache_buster = int(datetime.now().timestamp())
         self._runner = ScrapeRunner(
             account_id=self._account_id,
-            url=f"{CODEX_ANALYTICS_URL}?aigauge_ts={cache_buster}#personal-usage",
+            url=CODEX_OVERVIEW_URL,
             extractor_js=EXTRACTOR_JS,
             build=_build,
             log=log,

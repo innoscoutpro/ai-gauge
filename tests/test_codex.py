@@ -34,6 +34,15 @@ def test_parse_reset_text_handles_at_prefix_and_date_at_time():
     assert dated.minute == 36
 
 
+def test_parse_reset_text_handles_overview_days_and_hours():
+    before = datetime.now()
+    parsed = _parse_reset_text("3d 12h")
+    after = datetime.now()
+    assert parsed is not None
+    assert before + timedelta(days=3, hours=12) <= parsed
+    assert parsed <= after + timedelta(days=3, hours=12)
+
+
 def test_codex_logged_out_payload_is_auth_required():
     snapshot = _build_snapshot(
         {
@@ -213,6 +222,80 @@ def test_codex_weekly_only_shared_limit_layout_is_supported():
     assert snapshot.metrics[0].percent_used == 95.0
     assert snapshot.metrics[0].resets_at == datetime(2026, 7, 20, 19, 57)
     assert snapshot.metrics[0].window == timedelta(days=7)
+
+
+def test_codex_overview_weekly_limit_left_from_screenshot():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": None,
+            "weekly": None,
+            "url": "https://chatgpt.com/settings/usage?tab=overview",
+            "title": "ChatGPT",
+            "body_text": (
+                "Usage Overview Analytics Plan limits Shared across Codex, Work, "
+                "Workspace Agents, and ChatGPT for Excel. "
+                "Weekly limit Resets in 3d 12h 75% left "
+                "Credits 0 credits remaining Usage limit resets"
+            ),
+            "has_percent_text": True,
+            "has_usage_text": True,
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [(m.label, m.percent_used) for m in snapshot.metrics] == [
+        ("Weekly", 25.0)
+    ]
+
+
+def test_codex_overview_weekly_limit_survives_subday_countdown():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "url": "https://chatgpt.com/settings/usage?tab=overview",
+            "title": "ChatGPT",
+            "body_text": "Usage Overview Analytics Plan limits Weekly limit Resets in 12h 15m 75% left",
+        }
+    )
+    assert snapshot.status == SnapshotStatus.OK
+    assert [(m.label, m.percent_used) for m in snapshot.metrics] == [
+        ("Weekly", 25.0)
+    ]
+
+
+def test_codex_overview_weekly_limit_accepts_days_only_reset():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "url": "https://chatgpt.com/settings/usage?tab=overview",
+            "title": "ChatGPT",
+            "body_text": "Usage Overview Analytics Plan limits Weekly limit Resets in 3d 75% left",
+        }
+    )
+    assert snapshot.status == SnapshotStatus.OK
+    assert snapshot.metrics[0].resets_at is not None
+
+
+def test_codex_analytics_history_is_not_a_current_weekly_limit():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": None,
+            "weekly": None,
+            "url": "https://chatgpt.com/settings/usage?tab=analytics#personal-usage",
+            "title": "ChatGPT",
+            "body_text": (
+                "Usage Overview Analytics Usage history "
+                "Plan usage history By feature Weekly limits Period % of limit used "
+                "Sep 26 – Oct 3 Usage as of Oct 2, 12:00 AM UTC 58.7%"
+            ),
+            "has_percent_text": True,
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert snapshot.metrics == []
 
 
 def test_codex_weekly_only_without_shared_layout_context_is_transient_error():
