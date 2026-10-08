@@ -4,6 +4,7 @@ import json
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -58,33 +59,102 @@ def resolve_cli(cli_path: str | None) -> str | None:
     return None
 
 
+# Refresh is serial and has no watchdog, so nothing here may wait without a
+# bound. subprocess.run(timeout=) is not enough: on Windows it kills only the
+# direct child and then reads the pipes until every descendant has let go.
+_CLI_TIMEOUT_SECONDS = 60
+_KILL_GRACE_SECONDS = 5
+_TIMEOUT_ERROR = f"agy timeout: no reply within {_CLI_TIMEOUT_SECONDS}s"
+
+
+def _taskkill_executable() -> str:
+    system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+    if system_root:
+        return str(Path(system_root) / "System32" / "taskkill.exe")
+    return "taskkill"
+
+
+def _kill_process_tree(proc: subprocess.Popen[str]) -> None:
+    """Kill agy and whatever it started. Never waits longer than the grace."""
+    if sys.platform == "win32":
+        try:
+            killer = subprocess.Popen(
+                [_taskkill_executable(), "/PID", str(proc.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except OSError:
+            killer = None
+        if killer is not None:
+            try:
+                killer.wait(timeout=_KILL_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                try:
+                    killer.kill()
+                except OSError:
+                    pass
+    else:
+        try:
+            # start_new_session made agy the leader of its own process group.
+            os.killpg(proc.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        except OSError:
+            pass
+    try:
+        # Covers a failed taskkill or killpg; harmless once the child is gone.
+        proc.kill()
+    except OSError:
+        pass
+
+
 def _invoke_cli(exe: str) -> subprocess.CompletedProcess[str]:
+    args = [
+        exe,
+        "--print",
+        "/quota",
+        "--output-format",
+        "json",
+        "--mode",
+        "plan",
+        "--sandbox",
+        "--print-timeout",
+        "30s",
+    ]
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as cwd:
         env = os.environ.copy()
         env.update(_AGY_ENV_OVERRIDES)
-        return subprocess.run(
-            [
-                exe,
-                "--print",
-                "/quota",
-                "--output-format",
-                "json",
-                "--mode",
-                "plan",
-                "--sandbox",
-                "--print-timeout",
-                "30s",
-            ],
-            capture_output=True,
+        # Deliberately not "with Popen(...)": leaving that block waits for the
+        # child without a timeout.
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            stdin=subprocess.DEVNULL,
-            timeout=60,
             cwd=cwd,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            start_new_session=sys.platform != "win32",
             env=env,
         )
+        try:
+            stdout, stderr = proc.communicate(timeout=_CLI_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            _kill_process_tree(proc)
+            try:
+                proc.communicate(timeout=_KILL_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                # Something still holds the pipes. Abandon them rather than
+                # wait: the reader threads are daemons, and closing a pipe
+                # another thread is reading can itself block.
+                pass
+            raise subprocess.TimeoutExpired(args, _CLI_TIMEOUT_SECONDS) from None
+        except BaseException:
+            _kill_process_tree(proc)
+            raise
+        return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
 
 
 def _decode_output(stdout: str) -> dict[str, Any]:
@@ -303,7 +373,7 @@ class AntigravityProvider(Provider):
                 return UsageSnapshot(
                     provider=self.name,
                     status=SnapshotStatus.ERROR,
-                    error="agy timed out",
+                    error=_TIMEOUT_ERROR,
                 )
             except (FileNotFoundError, OSError) as exc:
                 reason = str(exc).splitlines()[0][:120]

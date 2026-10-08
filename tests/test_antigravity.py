@@ -32,6 +32,84 @@ def _payload() -> dict:
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
 
 
+class _FakePopen:
+    """Stands in for subprocess.Popen; any wait without a timeout fails the test.
+
+    ``replies`` are consumed by successive communicate() calls on the agy
+    process: a (stdout, stderr) tuple is returned, "timeout" raises
+    TimeoutExpired. taskkill (the only other thing the module spawns) exits
+    at once unless ``taskkill_hangs`` is set.
+    """
+
+    def __init__(self, replies=(("{}", ""),), *, taskkill_hangs=False):
+        self.replies = list(replies)
+        self.taskkill_hangs = taskkill_hangs
+        self.spawned: list[SimpleNamespace] = []
+        self.communicate_timeouts: list[float] = []
+        self.wait_timeouts: list[float] = []
+        self.kills: list[int] = []
+
+    @property
+    def taskkill_calls(self) -> list[SimpleNamespace]:
+        return [call for call in self.spawned if call.is_taskkill]
+
+    def __call__(self, args, **kwargs):
+        fake = self
+        is_taskkill = "taskkill" in Path(str(args[0])).name.lower()
+        pid = 4000 + len(self.spawned)
+        self.spawned.append(
+            SimpleNamespace(args=list(args), kwargs=kwargs, is_taskkill=is_taskkill)
+        )
+        if not is_taskkill:
+            assert Path(kwargs["cwd"]).is_dir()
+            assert list(Path(kwargs["cwd"]).iterdir()) == []
+
+        class Process:
+            returncode = None
+
+            def __enter__(self):
+                raise AssertionError("Popen as a context manager waits unbounded")
+
+            def communicate(self, input=None, timeout=None):
+                assert not is_taskkill
+                assert timeout is not None, "communicate() without a timeout"
+                fake.communicate_timeouts.append(timeout)
+                reply = fake.replies.pop(0)
+                if reply == "timeout":
+                    raise subprocess.TimeoutExpired(args, timeout)
+                self.returncode = 0
+                return reply
+
+            def wait(self, timeout=None):
+                assert timeout is not None, "wait() without a timeout"
+                assert is_taskkill, "only taskkill may be waited on"
+                fake.wait_timeouts.append(timeout)
+                if fake.taskkill_hangs:
+                    raise subprocess.TimeoutExpired(args, timeout)
+                self.returncode = 0
+                return 0
+
+            def kill(self):
+                fake.kills.append(pid)
+
+        process = Process()
+        process.pid = pid
+        return process
+
+
+def _use_platform(monkeypatch, platform: str) -> list[tuple[int, int]]:
+    """Pretend to be ``platform``; returns the list os.killpg calls land in."""
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(antigravity.sys, "platform", platform)
+    monkeypatch.setattr(
+        antigravity.os,
+        "killpg",
+        lambda pgid, sig: killed.append((pgid, sig)),
+        raising=False,
+    )
+    return killed
+
+
 def _sync(provider: AntigravityProvider, monkeypatch) -> None:
     monkeypatch.setattr(provider, "_run_async", lambda work, on_done: on_done(work()))
 
@@ -242,7 +320,7 @@ def test_missing_executable_reports_error(monkeypatch):
     ("exception", "expected"),
     [
         (FileNotFoundError("missing"), "failed to start agy: missing"),
-        (subprocess.TimeoutExpired("agy", 60), "agy timed out"),
+        (subprocess.TimeoutExpired("agy", 60), "agy timeout: no reply within 60s"),
     ],
 )
 def test_cli_start_and_timeout_errors(monkeypatch, exception, expected):
@@ -301,46 +379,144 @@ def test_resolve_cli_uses_local_app_data_fallback_on_windows(monkeypatch, tmp_pa
     assert resolve_cli(None) == str(fallback)
 
 
-def test_invoke_cli_arguments_and_isolated_working_directory(monkeypatch):
-    captured = {}
+AGY_ARGS = [
+    "agy-executable",
+    "--print",
+    "/quota",
+    "--output-format",
+    "json",
+    "--mode",
+    "plan",
+    "--sandbox",
+    "--print-timeout",
+    "30s",
+]
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_invoke_cli_arguments_and_isolated_working_directory(monkeypatch, platform):
+    killed = _use_platform(monkeypatch, platform)
     monkeypatch.delenv("AGY_CLI_DISABLE_AUTO_UPDATE", raising=False)
     monkeypatch.setenv("AI_GAUGE_TEST_ENV", "preserved")
-
-    def fake_run(args, **kwargs):
-        captured["args"] = args
-        captured.update(kwargs)
-        assert Path(kwargs["cwd"]).is_dir()
-        assert list(Path(kwargs["cwd"]).iterdir()) == []
-        return subprocess.CompletedProcess(args, 0, "{}", "")
-
-    monkeypatch.setattr(antigravity.subprocess, "run", fake_run)
+    popen = _FakePopen([('{"status": "SUCCESS"}', "noise")])
+    monkeypatch.setattr(antigravity.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        antigravity.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("subprocess.run has an unbounded wait"),
+    )
 
     assert "AGY_CLI_DISABLE_AUTO_UPDATE" not in antigravity.os.environ
-    _invoke_cli("agy-executable")
+    result = _invoke_cli("agy-executable")
 
-    assert captured["args"] == [
-        "agy-executable",
-        "--print",
-        "/quota",
-        "--output-format",
-        "json",
-        "--mode",
-        "plan",
-        "--sandbox",
-        "--print-timeout",
-        "30s",
-    ]
-    assert "shell" not in captured
-    assert captured["stdin"] == subprocess.DEVNULL
-    assert captured["timeout"] == 60
-    assert captured["capture_output"] is True
-    assert captured["text"] is True
-    assert captured["encoding"] == "utf-8"
-    assert captured["errors"] == "replace"
-    assert captured["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    assert captured["env"]["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"
-    assert captured["env"]["AI_GAUGE_TEST_ENV"] == "preserved"
+    assert result.stdout == '{"status": "SUCCESS"}'
+    assert result.stderr == "noise"
+    assert result.returncode == 0
+    assert len(popen.spawned) == 1
+    call = popen.spawned[0]
+    assert call.args == AGY_ARGS
+    kwargs = call.kwargs
+    assert "shell" not in kwargs
+    assert kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs["stdout"] == subprocess.PIPE
+    assert kwargs["stderr"] == subprocess.PIPE
+    assert kwargs["text"] is True
+    assert kwargs["encoding"] == "utf-8"
+    assert kwargs["errors"] == "replace"
+    assert kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert kwargs["start_new_session"] is (platform != "win32")
+    assert kwargs["env"]["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"
+    assert kwargs["env"]["AI_GAUGE_TEST_ENV"] == "preserved"
     assert "AGY_CLI_DISABLE_AUTO_UPDATE" not in antigravity.os.environ
+    assert popen.communicate_timeouts == [60]
+    assert killed == [] and popen.kills == [] and popen.wait_timeouts == []
+
+
+def _timeout_snapshot(monkeypatch, tmp_path, popen):
+    cli = tmp_path / "agy.exe"
+    cli.touch()
+    provider = AntigravityProvider(cli_path=str(cli))
+    _sync(provider, monkeypatch)
+    monkeypatch.setattr(antigravity.subprocess, "Popen", popen)
+    snapshots = []
+    provider.refresh(snapshots.append)
+    return snapshots[0]
+
+
+@pytest.mark.parametrize("second_reply", [("", ""), "timeout"])
+def test_timeout_kills_the_process_tree_on_windows(monkeypatch, tmp_path, second_reply):
+    killed = _use_platform(monkeypatch, "win32")
+    monkeypatch.setenv("SystemRoot", "C:/Windows")
+    popen = _FakePopen(["timeout", second_reply])
+
+    snapshot = _timeout_snapshot(monkeypatch, tmp_path, popen)
+
+    assert snapshot.status is SnapshotStatus.ERROR
+    assert snapshot.error == "agy timeout: no reply within 60s"
+    # One bounded read after the kill, and nothing after that either way.
+    assert popen.communicate_timeouts == [60, 5]
+    assert popen.replies == []
+    agy_pid = 4000
+    (taskkill,) = popen.taskkill_calls
+    assert Path(taskkill.args[0]) == Path("C:/Windows/System32/taskkill.exe")
+    assert taskkill.args[1:] == ["/PID", str(agy_pid), "/T", "/F"]
+    assert "shell" not in taskkill.kwargs
+    assert taskkill.kwargs["stdin"] == subprocess.DEVNULL
+    assert taskkill.kwargs["stdout"] == subprocess.DEVNULL
+    assert taskkill.kwargs["stderr"] == subprocess.DEVNULL
+    assert taskkill.kwargs["creationflags"] == getattr(
+        subprocess, "CREATE_NO_WINDOW", 0
+    )
+    assert popen.wait_timeouts == [5]
+    assert popen.kills == [agy_pid]
+    assert killed == []
+    assert antigravity._PROCESS_LATCHED_ERROR is None
+
+
+@pytest.mark.parametrize("second_reply", [("", ""), "timeout"])
+def test_timeout_kills_the_process_group_on_posix(monkeypatch, tmp_path, second_reply):
+    killed = _use_platform(monkeypatch, "linux")
+    popen = _FakePopen(["timeout", second_reply])
+
+    snapshot = _timeout_snapshot(monkeypatch, tmp_path, popen)
+
+    assert snapshot.status is SnapshotStatus.ERROR
+    assert snapshot.error == "agy timeout: no reply within 60s"
+    assert popen.communicate_timeouts == [60, 5]
+    assert popen.replies == []
+    assert popen.taskkill_calls == []
+    assert [pgid for pgid, _ in killed] == [4000]
+    assert popen.kills == [4000]
+
+
+def test_timeout_survives_a_taskkill_that_hangs_or_cannot_start(monkeypatch, tmp_path):
+    _use_platform(monkeypatch, "win32")
+    popen = _FakePopen(["timeout", "timeout"], taskkill_hangs=True)
+
+    snapshot = _timeout_snapshot(monkeypatch, tmp_path, popen)
+
+    assert snapshot.error == "agy timeout: no reply within 60s"
+    assert popen.wait_timeouts == [5]
+    # The hung taskkill is killed and left; agy still gets a direct kill.
+    assert popen.kills == [4001, 4000]
+
+    class NoTaskkill(_FakePopen):
+        def __call__(self, args, **kwargs):
+            if "taskkill" in str(args[0]).lower():
+                raise FileNotFoundError("taskkill")
+            return super().__call__(args, **kwargs)
+
+    popen = NoTaskkill(["timeout", ("", "")])
+    snapshot = _timeout_snapshot(monkeypatch, tmp_path, popen)
+
+    assert snapshot.error == "agy timeout: no reply within 60s"
+    assert popen.kills == [4000]
+
+
+def test_timeout_error_reads_as_a_timeout_on_the_tile():
+    from aigauge.widget import _short_error_reason
+
+    assert _short_error_reason(antigravity._TIMEOUT_ERROR) == "error \u00b7 timeout"
 
 
 @pytest.mark.parametrize(
@@ -426,11 +602,13 @@ def _provider_for_payload(monkeypatch, tmp_path, payload):
     _sync(provider, monkeypatch)
     calls = []
 
-    def run(args, **kwargs):
-        calls.append(args)
-        return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+    class Popen(_FakePopen):
+        def __call__(self, args, **kwargs):
+            calls.append(args)
+            self.replies.append((json.dumps(payload), ""))
+            return super().__call__(args, **kwargs)
 
-    monkeypatch.setattr(antigravity.subprocess, "run", run)
+    monkeypatch.setattr(antigravity.subprocess, "Popen", Popen([]))
     return provider, calls
 
 
@@ -519,8 +697,8 @@ def test_wrong_explicit_executable_is_rejected_without_running(monkeypatch, tmp_
     _sync(provider, monkeypatch)
     monkeypatch.setattr(
         antigravity.subprocess,
-        "run",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not run")),
+        "Popen",
+        lambda *args, **kwargs: pytest.fail("must not run"),
     )
     snapshots = []
 
