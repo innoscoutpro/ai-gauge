@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.8.6 - 2026-10-08
+
+### Added
+
+- Optional Antigravity tile showing the quota that Google's `agy` CLI reports for Gemini and for Claude and GPT models. It is off by default; turn it on in Settings, General. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@DraftingDreamer](https://github.com/DraftingDreamer).)
+
+### Fixed
+
+- AI Gauge now asks for usage pages in English whatever the system language is. Codex usage failed on non-English systems because ChatGPT translated the page. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@DraftingDreamer](https://github.com/DraftingDreamer).)
+
 ## 0.8.5 - 2026-10-05
 
 ### Changed

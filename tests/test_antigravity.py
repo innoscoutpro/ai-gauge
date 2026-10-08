@@ -156,6 +156,23 @@ def test_fixture_maps_metrics_in_group_and_window_order():
     assert len(snapshot.raw["buckets"]) == 4
 
 
+def test_real_free_account_reply_maps_two_idle_weekly_metrics():
+    """A reply captured from agy on a free account, not written by hand."""
+    raw = FIXTURE.with_name("quota_free_weekly.json").read_text(encoding="utf-8")
+
+    snapshot = _build_snapshot(_decode_output(raw))
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.label for metric in snapshot.metrics] == [
+        "Gemini weekly",
+        "Claude+GPT weekly",
+    ]
+    assert [metric.percent_used for metric in snapshot.metrics] == [0.0, 0.0]
+    assert [metric.window for metric in snapshot.metrics] == [timedelta(days=7)] * 2
+    # An untouched limit reports "now + 7 days", so there is no countdown yet.
+    assert all(metric.resets_at is None for metric in snapshot.metrics)
+
+
 def _weekly_only(payload: dict) -> dict:
     """The fixture as an account without a 5-hour window would report it."""
     for group in payload["command"]["data"]["groups"]:
