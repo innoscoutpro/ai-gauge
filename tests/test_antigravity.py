@@ -156,6 +156,60 @@ def test_fixture_maps_metrics_in_group_and_window_order():
     assert len(snapshot.raw["buckets"]) == 4
 
 
+def _weekly_only(payload: dict) -> dict:
+    """The fixture as an account without a 5-hour window would report it."""
+    for group in payload["command"]["data"]["groups"]:
+        group["buckets"] = [
+            bucket for bucket in group["buckets"] if bucket["window"] != "5h"
+        ]
+    return payload
+
+
+def test_weekly_only_reply_maps_one_weekly_metric_per_group():
+    snapshot = _build_snapshot(_weekly_only(_payload()))
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.label for metric in snapshot.metrics] == [
+        "Gemini weekly",
+        "Claude+GPT weekly",
+    ]
+    assert [metric.percent_used for metric in snapshot.metrics] == pytest.approx(
+        [13.184946775436401, 88.507279753684998]
+    )
+    assert [metric.window for metric in snapshot.metrics] == [timedelta(days=7)] * 2
+    assert all(metric.resets_at is not None for metric in snapshot.metrics)
+    assert all(metric.tag is None for metric in snapshot.metrics)
+    assert [bucket["id"] for bucket in snapshot.raw["buckets"]] == [
+        "gemini-weekly",
+        "3p-weekly",
+    ]
+
+
+def test_single_group_weekly_only_reply_maps_one_metric():
+    payload = _weekly_only(_payload())
+    payload["command"]["data"]["groups"] = payload["command"]["data"]["groups"][:1]
+
+    snapshot = _build_snapshot(payload)
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.label for metric in snapshot.metrics] == ["Gemini weekly"]
+    assert snapshot.metrics[0].percent_used == pytest.approx(13.184946775436401)
+    assert snapshot.metrics[0].window == timedelta(days=7)
+    assert len(snapshot.raw["buckets"]) == 1
+
+
+def test_unused_weekly_only_reply_is_idle_not_an_error():
+    payload = _weekly_only(_payload())
+    payload["command"]["data"]["groups"] = payload["command"]["data"]["groups"][:1]
+    payload["command"]["data"]["groups"][0]["buckets"][0]["remaining_fraction"] = 1
+
+    snapshot = _build_snapshot(payload)
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert snapshot.metrics[0].percent_used == 0
+    assert snapshot.metrics[0].reset_label == "idle"
+
+
 def test_bucket_without_description_is_parsed_and_integer_one_is_idle():
     payload = _payload()
     payload["command"]["data"]["groups"][1]["buckets"][1]["reset_time"] = (

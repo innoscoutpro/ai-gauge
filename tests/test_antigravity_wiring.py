@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -385,3 +386,96 @@ def test_agy_not_found_has_a_tile_label(qtbot, error):
     )
     assert "error \u00b7 agy not found" in tile.status.text()
     assert tile.status.toolTip().startswith(error)
+
+
+FIXTURE = Path(__file__).parent / "fixtures" / "antigravity" / "quota_ok.json"
+
+
+def _fixture_snapshot(*, weekly_only: bool = False, groups: int = 2) -> UsageSnapshot:
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    data = payload["command"]["data"]
+    data["groups"] = data["groups"][:groups]
+    if weekly_only:
+        for group in data["groups"]:
+            group["buckets"] = [b for b in group["buckets"] if b["window"] != "5h"]
+    return antigravity._build_snapshot(payload)
+
+
+def _antigravity_widget(qtbot, snapshot: UsageSnapshot) -> UsageWidget:
+    config = Config()
+    config.providers.claude = config.providers.codex = False
+    config.providers.copilot = False
+    config.providers.antigravity = True
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+    widget.ensure_tile("antigravity", "Antigravity")
+    widget.update_snapshot(snapshot, "Antigravity")
+    widget.show()
+    widget._do_refit_height()  # noqa: SLF001
+    return widget
+
+
+def _chip_texts(widget: UsageWidget) -> list[str]:
+    layout = widget._collapsed_summary_layout  # noqa: SLF001
+    texts = []
+    for index in range(layout.count()):
+        row = layout.itemAt(index).widget()
+        if row is None or row.layout() is None:
+            continue
+        for position in range(row.layout().count()):
+            chip = row.layout().itemAt(position).widget()
+            if chip is not None:
+                texts.append(chip.text())
+    return texts
+
+
+@pytest.mark.parametrize(
+    ("weekly_only", "groups", "rows", "chip"),
+    [
+        (
+            False, 2,
+            [
+                ("Gemini 5h", "15%"),
+                ("Gemini weekly", "13%"),
+                ("Claude+GPT 5h", "0%"),
+                ("Claude+GPT weekly", "89%"),
+            ],
+            "Antigravity 15%",
+        ),
+        # A free account: a weekly quota and no 5-hour window.
+        (
+            True, 2,
+            [("Gemini weekly", "13%"), ("Claude+GPT weekly", "89%")],
+            "Antigravity 13%",
+        ),
+        (True, 1, [("Gemini weekly", "13%")], "Antigravity 13%"),
+    ],
+)
+def test_tile_renders_every_reply_shape_like_any_other_provider(
+    qtbot, weekly_only, groups, rows, chip
+):
+    widget = _antigravity_widget(
+        qtbot, _fixture_snapshot(weekly_only=weekly_only, groups=groups)
+    )
+    tile = widget._tiles["antigravity"]  # noqa: SLF001
+
+    assert tile.status.text() == ""
+    assert [(row.label.text(), row.pct.text()) for row in tile._rows] == rows  # noqa: SLF001
+    # Plain rows, as for Copilot: no compact form and nothing to expand.
+    assert tile._compact_summary.isHidden()  # noqa: SLF001
+    assert tile.expand_btn.isHidden()
+    previous_bottom = -1
+    for row in tile._rows:  # noqa: SLF001
+        assert not row.bar.isHidden()
+        geometry = row.geometry()
+        assert geometry.top() > previous_bottom
+        assert geometry.left() >= 0 and geometry.right() < tile.width()
+        assert row.label.width() >= row.label.fontMetrics().horizontalAdvance(
+            row.label.text()
+        )
+        previous_bottom = geometry.bottom()
+    assert tile.geometry().bottom() < widget.height()
+
+    # The collapsed pill shows one chip per provider, from the first metric.
+    widget.set_collapsed(True)
+    assert _chip_texts(widget) == [chip]
