@@ -760,7 +760,9 @@ class _NavList(QListWidget):
         event.accept()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        if event.modifiers() == Qt.KeyboardModifier.AltModifier and event.key() in (
+        # macOS reports the arrow keys with the keypad modifier set.
+        modifiers = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        if modifiers == Qt.KeyboardModifier.AltModifier and event.key() in (
             Qt.Key.Key_Up,
             Qt.Key.Key_Down,
         ):
@@ -789,10 +791,11 @@ class SettingsDialog(QDialog):
         # this existing Settings window back to the foreground.
         self.setWindowTitle("AI Gauge — Settings")
         self.setModal(False)
-        # The layout minimum is the real floor (Claude is the widest page,
-        # General the tallest): 150 px list + 10 gap + a page area as wide as
-        # a tab page was (about 615 px) + margins.
-        self.resize(800, 620)
+        # The layout minimum is the real floor (Claude is the widest page):
+        # 150 px list + 10 gap + a page area as wide as a tab page was (about
+        # 615 px) + margins. The height is what GitHub Copilot, the tallest
+        # page, needs to show its wrapped hints in full.
+        self.resize(800, 680)
         self.setMinimumSize(790, 420)
         self.setStyleSheet(_build_stylesheet())
         self._config = config

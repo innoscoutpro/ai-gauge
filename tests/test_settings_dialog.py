@@ -895,6 +895,23 @@ def test_alt_arrows_move_the_current_provider_row(qtbot):
     assert dialog.current_page_key() == "mcp"
 
 
+def test_alt_arrows_work_when_the_arrow_key_carries_the_keypad_modifier(qtbot):
+    # macOS sets KeypadModifier on every arrow key.
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.show_page("claude")
+    dialog.nav_list.setFocus()
+
+    qtbot.keyClick(
+        dialog.nav_list,
+        Qt.Key.Key_Down,
+        Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.KeypadModifier,
+    )
+
+    assert dialog.provider_order()[:2] == ["codex", "claude"]
+
+
 def test_apply_to_writes_the_provider_order(qtbot):
     config = Config()
     dialog = SettingsDialog(config)
