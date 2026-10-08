@@ -6,16 +6,20 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from PyQt6.QtCore import QDir, QPointF, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QDir, QPoint, QPointF, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QDesktopServices,
+    QDragMoveEvent,
+    QDropEvent,
+    QKeyEvent,
     QPainter,
     QPen,
     QPixmap,
     QPolygonF,
 )
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -48,6 +52,7 @@ from .config import (
     BrowserAccount,
     ColorThresholds,
     Config,
+    DEFAULT_PROVIDER_ORDER,
     account_display_name,
     app_data_dir,
     browser_accounts,
@@ -56,6 +61,7 @@ from .config import (
     get_openrouter_key,
     get_openrouter_mgmt_key,
     provider_base_name,
+    provider_order as config_provider_order,
     set_github_pat,
     set_opencode_go_key,
     set_openrouter_key,
@@ -665,6 +671,108 @@ _NAV_ENTRIES: tuple[tuple[str | None, str], ...] = (
 _PROVIDER_PAGE_KEYS = frozenset(
     {"claude", "codex", "opencode_go", "copilot", "openrouter", "antigravity"}
 )
+_PROVIDER_LABELS = {
+    key: label for key, label in _NAV_ENTRIES if key in _PROVIDER_PAGE_KEYS
+}
+_NAV_DIM_COLOR = "#6b7280"
+_NAV_REORDER_TIP = "Drag to reorder, or press Alt+Up / Alt+Down."
+
+
+def _add_provider_enable_row(layout: QVBoxLayout, checkbox: QCheckBox, kind: str) -> None:
+    """Put a provider's enable checkbox and its hint at the top of its page."""
+    layout.addWidget(checkbox)
+    layout.addWidget(
+        _hint_label(
+            f"When off, AI Gauge does not poll {_PROVIDER_LABELS[kind]} and hides "
+            "it from the widget. Drag providers in the sidebar to change their "
+            "order."
+        )
+    )
+
+
+class _NavList(QListWidget):
+    """The settings sidebar: provider rows can be dragged into a new order.
+
+    Only provider rows are draggable and no row accepts a drop, so a drop
+    always lands between rows. Qt's own InternalMove would remove and re-add
+    the item; instead the drop is turned into `move_provider` and reported as
+    ignored so Qt leaves the source row alone.
+    """
+
+    def __init__(self, move_provider: Callable[[str, int], None], parent=None):
+        super().__init__(parent)
+        self._move_provider = move_provider
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDropIndicatorShown(True)
+
+    def _row_key(self, row: int):
+        return self.item(row).data(Qt.ItemDataRole.UserRole)
+
+    def _provider_row_range(self) -> tuple[int, int] | None:
+        rows = [
+            row
+            for row in range(self.count())
+            if self._row_key(row) in _PROVIDER_PAGE_KEYS
+        ]
+        return (rows[0], rows[-1]) if rows else None
+
+    def drop_position(self, pos: QPoint) -> int | None:
+        """Where a drop at `pos` would insert, as a position among the providers.
+
+        0 means before the first provider and the provider count means after
+        the last. None when `pos` is outside the provider section.
+        """
+        bounds = self._provider_row_range()
+        if bounds is None:
+            return None
+        first, last = bounds
+        if (
+            pos.y() < self.visualItemRect(self.item(first)).top()
+            or pos.y() > self.visualItemRect(self.item(last)).bottom()
+        ):
+            return None
+        item = self.itemAt(pos)
+        if item is None:
+            return None
+        row = self.row(item)
+        if pos.y() > self.visualItemRect(item).center().y():
+            row += 1
+        return row - first
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        super().dragMoveEvent(event)
+        if self.drop_position(event.position().toPoint()) is None:
+            event.ignore()
+        else:
+            event.accept()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        item = self.currentItem()
+        kind = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        position = self.drop_position(event.position().toPoint())
+        if kind in _PROVIDER_PAGE_KEYS and position is not None:
+            bounds = self._provider_row_range()
+            source = self.row(item) - bounds[0]
+            # `position` counts the dragged row itself; the index is where it
+            # ends up once it has been taken out.
+            self._move_provider(kind, position - 1 if position > source else position)
+        event.setDropAction(Qt.DropAction.IgnoreAction)
+        event.accept()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.modifiers() == Qt.KeyboardModifier.AltModifier and event.key() in (
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
+        ):
+            item = self.currentItem()
+            kind = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+            if kind in _PROVIDER_PAGE_KEYS:
+                bounds = self._provider_row_range()
+                step = -1 if event.key() == Qt.Key.Key_Up else 1
+                self._move_provider(kind, self.row(item) - bounds[0] + step)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class SettingsDialog(QDialog):
@@ -808,44 +916,31 @@ class SettingsDialog(QDialog):
         general_grid.addWidget(self.sign_in_browser_combo, 5, 1, 1, 3)
 
         # ----- Providers -----
-        providers = QGroupBox("Providers")
-        providers_layout = QVBoxLayout(providers)
-        providers_layout.setSpacing(8)
-
-        providers_hint = _hint_label(
-            "Show or hide provider groups in the widget. Manage multiple Claude, "
-            "Codex, or OpenCode accounts from their pages."
-        )
-        providers_layout.addWidget(providers_hint)
-
-        self.claude_cb = QCheckBox("Claude")
+        # The enable checkboxes live on each provider's own page; they are
+        # created here, ahead of the pages that hold them.
+        self.claude_cb = QCheckBox("Enable Claude")
         self.claude_cb.setToolTip("Show Claude accounts in the panel.")
         self.claude_cb.setChecked(config.providers.claude)
-        providers_layout.addWidget(self.claude_cb)
 
-        self.codex_cb = QCheckBox("Codex")
+        self.codex_cb = QCheckBox("Enable Codex")
         self.codex_cb.setToolTip("Show Codex accounts in the panel.")
         self.codex_cb.setChecked(config.providers.codex)
-        providers_layout.addWidget(self.codex_cb)
 
-        self.opencode_go_cb = QCheckBox("OpenCode")
+        self.opencode_go_cb = QCheckBox("Enable OpenCode")
         self.opencode_go_cb.setToolTip("Show OpenCode accounts in the panel.")
         self.opencode_go_cb.setChecked(config.providers.opencode_go)
-        providers_layout.addWidget(self.opencode_go_cb)
 
-        self.copilot_cb = QCheckBox("GitHub Copilot")
+        self.copilot_cb = QCheckBox("Enable GitHub Copilot")
         self.copilot_cb.setToolTip("Show the GitHub Copilot usage tile in the panel.")
         self.copilot_cb.setChecked(config.providers.copilot)
-        providers_layout.addWidget(self.copilot_cb)
 
-        self.openrouter_cb = QCheckBox("OpenRouter")
+        self.openrouter_cb = QCheckBox("Enable OpenRouter")
         self.openrouter_cb.setToolTip("Show the OpenRouter usage tile in the panel.")
         self.openrouter_cb.setChecked(config.providers.openrouter)
-        providers_layout.addWidget(self.openrouter_cb)
-        self.antigravity_cb = QCheckBox("Antigravity")
+
+        self.antigravity_cb = QCheckBox("Enable Antigravity")
         self.antigravity_cb.setToolTip("Show the Antigravity usage tile in the panel.")
         self.antigravity_cb.setChecked(config.providers.antigravity)
-        providers_layout.addWidget(self.antigravity_cb)
 
         # ----- Claude accounts -----
         claude_accounts = QGroupBox("Claude Accounts")
@@ -854,7 +949,7 @@ class SettingsDialog(QDialog):
         claude_accounts_layout.addWidget(
             _hint_label(
                 "Name each Claude subscription here. All accounts appear when "
-                "Claude is enabled on the General page. <b>Sign in</b> opens a "
+                "Claude is enabled above. <b>Sign in</b> opens a "
                 "real installed browser and supports Google and passkeys; the "
                 "session is connected automatically."
             )
@@ -880,7 +975,7 @@ class SettingsDialog(QDialog):
         codex_accounts_layout.addWidget(
             _hint_label(
                 "Name each Codex subscription here. All accounts appear when "
-                "Codex is enabled on the General page. <b>Sign in</b> opens a "
+                "Codex is enabled above. <b>Sign in</b> opens a "
                 "real installed browser and supports Google and passkeys; the "
                 "session is connected automatically."
             )
@@ -1154,13 +1249,13 @@ class SettingsDialog(QDialog):
         general_tab_layout.setContentsMargins(10, 10, 10, 10)
         general_tab_layout.setSpacing(10)
         general_tab_layout.addWidget(general)
-        general_tab_layout.addWidget(providers)
         general_tab_layout.addStretch(1)
 
         claude_tab = QWidget()
         claude_tab_layout = QVBoxLayout(claude_tab)
         claude_tab_layout.setContentsMargins(10, 10, 10, 10)
         claude_tab_layout.setSpacing(10)
+        _add_provider_enable_row(claude_tab_layout, self.claude_cb, "claude")
         claude_tab_layout.addWidget(claude_accounts)
         claude_tab_layout.addStretch(1)
 
@@ -1168,6 +1263,7 @@ class SettingsDialog(QDialog):
         codex_tab_layout = QVBoxLayout(codex_tab)
         codex_tab_layout.setContentsMargins(10, 10, 10, 10)
         codex_tab_layout.setSpacing(10)
+        _add_provider_enable_row(codex_tab_layout, self.codex_cb, "codex")
         codex_tab_layout.addWidget(codex_accounts)
         codex_tab_layout.addStretch(1)
 
@@ -1175,6 +1271,7 @@ class SettingsDialog(QDialog):
         copilot_tab_layout = QVBoxLayout(copilot_tab)
         copilot_tab_layout.setContentsMargins(10, 10, 10, 10)
         copilot_tab_layout.setSpacing(10)
+        _add_provider_enable_row(copilot_tab_layout, self.copilot_cb, "copilot")
         copilot_tab_layout.addWidget(copilot)
         copilot_tab_layout.addStretch(1)
 
@@ -1182,6 +1279,9 @@ class SettingsDialog(QDialog):
         openrouter_tab_layout = QVBoxLayout(openrouter_tab)
         openrouter_tab_layout.setContentsMargins(10, 10, 10, 10)
         openrouter_tab_layout.setSpacing(10)
+        _add_provider_enable_row(
+            openrouter_tab_layout, self.openrouter_cb, "openrouter"
+        )
         openrouter_tab_layout.addWidget(openrouter)
         openrouter_tab_layout.addStretch(1)
 
@@ -1189,6 +1289,9 @@ class SettingsDialog(QDialog):
         antigravity_tab_layout = QVBoxLayout(antigravity_tab)
         antigravity_tab_layout.setContentsMargins(10, 10, 10, 10)
         antigravity_tab_layout.setSpacing(10)
+        _add_provider_enable_row(
+            antigravity_tab_layout, self.antigravity_cb, "antigravity"
+        )
         antigravity_tab_layout.addWidget(antigravity)
         antigravity_tab_layout.addStretch(1)
 
@@ -1196,6 +1299,9 @@ class SettingsDialog(QDialog):
         opencode_go_tab_layout = QVBoxLayout(opencode_go_tab)
         opencode_go_tab_layout.setContentsMargins(10, 10, 10, 10)
         opencode_go_tab_layout.setSpacing(10)
+        _add_provider_enable_row(
+            opencode_go_tab_layout, self.opencode_go_cb, "opencode_go"
+        )
         opencode_go_tab_layout.addWidget(opencode_go)
         opencode_go_tab_layout.addStretch(1)
 
@@ -1278,7 +1384,7 @@ class SettingsDialog(QDialog):
             "mcp": mcp_tab,
             "local_usage": local_usage_scroll,
         }
-        self.nav_list = QListWidget()
+        self.nav_list = _NavList(self.move_provider)
         self.nav_list.setObjectName("settings_nav")
         self.nav_list.setFixedWidth(_NAV_WIDTH)
         self.nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1291,20 +1397,40 @@ class SettingsDialog(QDialog):
         caption_font = self.nav_list.font()
         caption_font.setPointSizeF(max(6.0, caption_font.pointSizeF() * 0.8))
         caption_font.setBold(True)
+        # The provider slots in _NAV_ENTRIES are filled in the saved order;
+        # every other row keeps its place.
+        saved_order = iter(config_provider_order(config))
         for entry in _NAV_ENTRIES:
             if entry[0] is None:
                 caption = QListWidgetItem(entry[1])
                 caption.setFlags(Qt.ItemFlag.NoItemFlags)
                 caption.setFont(caption_font)
-                caption.setForeground(QColor("#6b7280"))
+                caption.setForeground(QColor(_NAV_DIM_COLOR))
                 self.nav_list.addItem(caption)
                 continue
             key, label = entry
+            flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            if key in _PROVIDER_PAGE_KEYS:
+                key = next(saved_order)
+                label = _PROVIDER_LABELS[key]
+                flags |= Qt.ItemFlag.ItemIsDragEnabled
             item = QListWidgetItem(label)
+            item.setFlags(flags)
             item.setData(Qt.ItemDataRole.UserRole, key)
             self.nav_list.addItem(item)
             self._page_rows[key] = self.nav_list.count() - 1
             self._page_indexes[key] = self.pages.addWidget(pages[key])
+        self._provider_checkboxes = {
+            "claude": self.claude_cb,
+            "codex": self.codex_cb,
+            "opencode_go": self.opencode_go_cb,
+            "copilot": self.copilot_cb,
+            "openrouter": self.openrouter_cb,
+            "antigravity": self.antigravity_cb,
+        }
+        for checkbox in self._provider_checkboxes.values():
+            checkbox.toggled.connect(self._refresh_provider_rows)
+        self._refresh_provider_rows()
         self.nav_list.currentRowChanged.connect(self._on_nav_row_changed)
         self.show_page("general")
 
@@ -1375,6 +1501,69 @@ class SettingsDialog(QDialog):
 
     def page_keys(self) -> list[str]:
         return list(self._page_rows)
+
+    def _provider_rows(self) -> list[int]:
+        """Sidebar rows that hold a provider, top to bottom."""
+        return [
+            row
+            for row in range(self.nav_list.count())
+            if self.nav_list.item(row).data(Qt.ItemDataRole.UserRole)
+            in _PROVIDER_PAGE_KEYS
+        ]
+
+    def provider_order(self) -> list[str]:
+        """Provider kinds in their current sidebar order."""
+        return [
+            self.nav_list.item(row).data(Qt.ItemDataRole.UserRole)
+            for row in self._provider_rows()
+        ]
+
+    def move_provider(self, kind: str, index: int) -> None:
+        """Move `kind` to position `index` among the providers (0 is first).
+
+        `index` is clamped to the provider section. The shown page and the
+        selected row do not change; only the sidebar order does.
+        """
+        order = self.provider_order()
+        if kind not in order:
+            return
+        rows = self._provider_rows()
+        index = max(0, min(index, len(rows) - 1))
+        source = rows[order.index(kind)]
+        target = rows[index]
+        if source == target:
+            return
+        current_key = self.current_page_key()
+        blocked = self.nav_list.blockSignals(True)
+        try:
+            item = self.nav_list.takeItem(source)
+            self.nav_list.insertItem(target, item)
+            self._rebuild_page_rows()
+            if current_key:
+                self.nav_list.setCurrentRow(self._page_rows[current_key])
+        finally:
+            self.nav_list.blockSignals(blocked)
+
+    def _rebuild_page_rows(self) -> None:
+        rows: dict[str, int] = {}
+        for row in range(self.nav_list.count()):
+            key = self.nav_list.item(row).data(Qt.ItemDataRole.UserRole)
+            if key is not None:
+                rows[key] = row
+        self._page_rows = rows
+
+    def _refresh_provider_rows(self) -> None:
+        """Dim the rows of providers that are off and set every row's tooltip."""
+        for kind, checkbox in self._provider_checkboxes.items():
+            item = self.nav_list.item(self._page_rows[kind])
+            if checkbox.isChecked():
+                item.setData(Qt.ItemDataRole.ForegroundRole, None)
+                item.setToolTip(_NAV_REORDER_TIP)
+            else:
+                item.setForeground(QColor(_NAV_DIM_COLOR))
+                item.setToolTip(
+                    f"{_PROVIDER_LABELS[kind]} is off.\n{_NAV_REORDER_TIP}"
+                )
 
     def current_page_key(self) -> str:
         item = self.nav_list.currentItem()
@@ -1816,6 +2005,10 @@ class SettingsDialog(QDialog):
         config.providers.openrouter = self.openrouter_cb.isChecked()
         config.providers.antigravity = self.antigravity_cb.isChecked()
         config.providers.opencode_go = self.opencode_go_cb.isChecked()
+        order = self.provider_order()
+        config.provider_order = (
+            [] if tuple(order) == DEFAULT_PROVIDER_ORDER else order
+        )
         for account_id, kind in self._removed_browser_accounts.items():
             if kind == "opencode_go":
                 continue

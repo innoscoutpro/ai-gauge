@@ -1,4 +1,6 @@
-from PyQt6.QtWidgets import QPushButton
+from PyQt6.QtCore import QMimeData, QPoint, QPointF, Qt
+from PyQt6.QtGui import QColor, QDragMoveEvent, QDropEvent
+from PyQt6.QtWidgets import QGroupBox, QLabel, QPushButton
 
 from aigauge import settings_dialog
 from aigauge.config import BrowserAccount, ColorThresholds, Config
@@ -592,3 +594,334 @@ def test_show_provider_lands_on_each_provider_page(qtbot):
         dialog.show_provider(kind)
         assert dialog.current_page_key() == kind
         assert dialog.pages.currentWidget() is dialog.page_widget(kind)
+
+
+# ----- provider enable checkboxes, sidebar state and order -----
+
+_PROVIDER_KINDS = ["claude", "codex", "opencode_go", "copilot", "openrouter", "antigravity"]
+
+
+def _nav_keys(dialog: SettingsDialog) -> list:
+    return [
+        dialog.nav_list.item(i).data(Qt.ItemDataRole.UserRole)
+        for i in range(dialog.nav_list.count())
+    ]
+
+
+def _nav_row(dialog: SettingsDialog, key: str):
+    return dialog.nav_list.item(_nav_keys(dialog).index(key))
+
+
+def _drop_at(dialog: SettingsDialog, pos: QPointF) -> QDropEvent:
+    event = QDropEvent(
+        pos,
+        Qt.DropAction.MoveAction,
+        QMimeData(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    dialog.nav_list.dropEvent(event)
+    return event
+
+
+def _drop(dialog: SettingsDialog, kind: str, target: str, below: bool) -> QDropEvent:
+    """Drag the `kind` row (made current, as a press does) onto `target`'s edge."""
+    dialog.show_page(kind)
+    rect = dialog.nav_list.visualItemRect(_nav_row(dialog, target))
+    y = rect.bottom() - 2 if below else rect.top() + 2
+    return _drop_at(dialog, QPointF(rect.center().x(), y))
+
+
+def test_each_enable_checkbox_lives_on_its_provider_page_only(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    checkboxes = {
+        "claude": (dialog.claude_cb, "Enable Claude"),
+        "codex": (dialog.codex_cb, "Enable Codex"),
+        "opencode_go": (dialog.opencode_go_cb, "Enable OpenCode"),
+        "copilot": (dialog.copilot_cb, "Enable GitHub Copilot"),
+        "openrouter": (dialog.openrouter_cb, "Enable OpenRouter"),
+        "antigravity": (dialog.antigravity_cb, "Enable Antigravity"),
+    }
+    for kind, (checkbox, text) in checkboxes.items():
+        assert checkbox.text() == text
+        assert dialog.page_widget(kind).isAncestorOf(checkbox)
+        assert not dialog.page_widget("general").isAncestorOf(checkbox)
+        # Page content stays editable when the provider is off.
+        checkbox.setChecked(False)
+        assert dialog.page_widget(kind).isEnabled()
+        assert checkbox.isEnabled()
+    assert all(box.title() != "Providers" for box in dialog.findChildren(QGroupBox))
+
+
+def test_enable_checkbox_sits_above_hint_and_group_box(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    layout = dialog.page_widget("codex").layout()
+    assert layout.itemAt(0).widget() is dialog.codex_cb
+    hint = layout.itemAt(1).widget()
+    assert "does not poll Codex" in hint.text()
+    assert "Drag providers in the sidebar" in hint.text()
+    assert isinstance(layout.itemAt(2).widget(), QGroupBox)
+
+
+def test_account_hints_no_longer_point_at_the_general_page(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    for kind in ("claude", "codex"):
+        texts = [label.text() for label in dialog.page_widget(kind).findChildren(QLabel)]
+        assert any("is enabled above" in text for text in texts)
+        assert not any("General" in text for text in texts)
+
+
+def test_sidebar_row_dims_when_provider_is_off_and_restores(qtbot):
+    dialog = SettingsDialog(Config(providers={"copilot": False}))
+    qtbot.addWidget(dialog)
+
+    row = _nav_row(dialog, "copilot")
+    other = _nav_row(dialog, "claude")
+    assert row.foreground().color() == QColor("#6b7280")
+    assert "off" in row.toolTip()
+    assert "Alt+Up" in row.toolTip()
+    assert "off" not in other.toolTip()
+    assert "Alt+Up" in other.toolTip()
+    assert other.data(Qt.ItemDataRole.ForegroundRole) is None
+
+    dialog.copilot_cb.setChecked(True)
+    assert row.data(Qt.ItemDataRole.ForegroundRole) is None
+    assert "off" not in row.toolTip()
+
+    dialog.claude_cb.setChecked(False)
+    assert other.foreground().color() == QColor("#6b7280")
+    assert "off" in other.toolTip()
+
+
+def test_dimming_follows_the_row_after_a_move(qtbot):
+    dialog = SettingsDialog(Config(providers={"codex": False}))
+    qtbot.addWidget(dialog)
+
+    dialog.move_provider("codex", 4)
+    assert _nav_row(dialog, "codex").foreground().color() == QColor("#6b7280")
+    dialog.codex_cb.setChecked(True)
+    assert _nav_row(dialog, "codex").data(Qt.ItemDataRole.ForegroundRole) is None
+
+
+def test_sidebar_follows_saved_provider_order(qtbot):
+    config = Config(provider_order=["openrouter", "claude"])
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    assert dialog.provider_order() == [
+        "openrouter", "claude", "codex", "opencode_go", "copilot", "antigravity",
+    ]
+    assert _nav_keys(dialog) == [
+        "general", None, "openrouter", "claude", "codex", "opencode_go",
+        "copilot", "antigravity", None, "mcp", "local_usage",
+    ]
+    assert sorted(dialog.page_keys()) == sorted(_PAGE_KEYS)
+    for kind in _PROVIDER_KINDS:
+        dialog.show_page(kind)
+        assert dialog.pages.currentWidget() is dialog.page_widget(kind)
+        assert dialog.current_page_key() == kind
+
+
+def test_only_provider_rows_are_draggable_and_none_accept_drops(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    for i in range(dialog.nav_list.count()):
+        item = dialog.nav_list.item(i)
+        assert not item.flags() & Qt.ItemFlag.ItemIsDropEnabled
+        is_provider = item.data(Qt.ItemDataRole.UserRole) in _PROVIDER_KINDS
+        assert bool(item.flags() & Qt.ItemFlag.ItemIsDragEnabled) == is_provider
+
+
+def test_move_provider_reorders_clamps_and_keeps_other_rows(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    dialog.show_page("codex")
+
+    dialog.move_provider("antigravity", 0)
+    assert dialog.provider_order() == [
+        "antigravity", "claude", "codex", "opencode_go", "copilot", "openrouter",
+    ]
+    dialog.move_provider("antigravity", 99)
+    assert dialog.provider_order() == _PROVIDER_KINDS
+    dialog.move_provider("claude", -5)
+    assert dialog.provider_order() == _PROVIDER_KINDS
+    dialog.move_provider("claude", 3)
+    assert dialog.provider_order() == [
+        "codex", "opencode_go", "copilot", "claude", "openrouter", "antigravity",
+    ]
+    # Non-provider rows never move, and asking to move one does nothing.
+    dialog.move_provider("mcp", 0)
+    dialog.move_provider("general", 3)
+    keys = _nav_keys(dialog)
+    assert keys[0] == "general" and keys[1] is None
+    assert keys[8] is None and keys[9:] == ["mcp", "local_usage"]
+    # The page that was shown stays shown and its row stays selected.
+    assert dialog.current_page_key() == "codex"
+    assert dialog.pages.currentWidget() is dialog.page_widget("codex")
+    assert dialog.nav_list.currentItem() is _nav_row(dialog, "codex")
+
+
+def test_show_page_lands_on_the_right_page_after_a_move(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    dialog.move_provider("openrouter", 0)
+    dialog.move_provider("claude", 5)
+    assert dialog.page_keys() == [
+        "general", "openrouter", "codex", "opencode_go", "copilot",
+        "antigravity", "claude", "mcp", "local_usage",
+    ]
+    for key in dialog.page_keys():
+        dialog.show_page(key)
+        assert dialog.current_page_key() == key
+        assert dialog.pages.currentWidget() is dialog.page_widget(key)
+        assert dialog.nav_list.currentRow() == _nav_keys(dialog).index(key)
+    dialog.show_provider("claude")
+    assert dialog.current_page_key() == "claude"
+
+
+def test_moving_the_selected_provider_keeps_its_page_shown(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    dialog.show_page("claude")
+
+    dialog.move_provider("claude", 4)
+
+    assert dialog.current_page_key() == "claude"
+    assert dialog.pages.currentWidget() is dialog.page_widget("claude")
+    assert dialog.nav_list.currentRow() == _nav_keys(dialog).index("claude")
+
+
+def test_drop_inside_provider_section_reorders_without_losing_rows(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    # Lower half of Copilot: Claude lands right after it.
+    event = _drop(dialog, "claude", "copilot", below=True)
+
+    assert event.dropAction() == Qt.DropAction.IgnoreAction
+    assert dialog.provider_order() == [
+        "codex", "opencode_go", "copilot", "claude", "openrouter", "antigravity",
+    ]
+    keys = _nav_keys(dialog)
+    assert sorted(k for k in keys if k in _PROVIDER_KINDS) == sorted(_PROVIDER_KINDS)
+    assert dialog.nav_list.count() == 11
+    assert dialog.current_page_key() == "claude"
+
+    # Upper half of Codex: Antigravity lands right before it.
+    _drop(dialog, "antigravity", "codex", below=False)
+    assert dialog.provider_order() == [
+        "antigravity", "codex", "opencode_go", "copilot", "claude", "openrouter",
+    ]
+    # Dropping a row on its own edges changes nothing.
+    _drop(dialog, "codex", "codex", below=True)
+    _drop(dialog, "codex", "codex", below=False)
+    assert dialog.provider_order() == [
+        "antigravity", "codex", "opencode_go", "copilot", "claude", "openrouter",
+    ]
+
+
+def test_drop_outside_provider_section_changes_nothing(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    dialog.show()
+    before = _nav_keys(dialog)
+
+    rects = [
+        dialog.nav_list.visualItemRect(dialog.nav_list.item(row))
+        for row in (0, 1, 8, 9, 10)  # General, PROVIDERS, TOOLS, MCP, Local usage
+    ]
+    for rect in rects:
+        dialog.show_page("claude")
+        event = _drop_at(dialog, QPointF(rect.center()))
+        assert event.dropAction() == Qt.DropAction.IgnoreAction
+        assert _nav_keys(dialog) == before
+        assert dialog.nav_list.count() == 11
+    assert dialog.nav_list.drop_position(QPoint(5, 5000)) is None
+
+
+def test_drag_move_refuses_positions_outside_the_provider_section(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    def move_event(pos: QPoint) -> QDragMoveEvent:
+        event = QDragMoveEvent(
+            pos,
+            Qt.DropAction.MoveAction,
+            QMimeData(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        dialog.nav_list.dragMoveEvent(event)
+        return event
+
+    inside = dialog.nav_list.visualItemRect(_nav_row(dialog, "codex")).center()
+    outside = dialog.nav_list.visualItemRect(_nav_row(dialog, "mcp")).center()
+    assert move_event(inside).isAccepted()
+    assert not move_event(outside).isAccepted()
+
+
+def test_alt_arrows_move_the_current_provider_row(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.show_page("codex")
+    dialog.nav_list.setFocus()
+
+    qtbot.keyClick(dialog.nav_list, Qt.Key.Key_Down, Qt.KeyboardModifier.AltModifier)
+    assert dialog.provider_order()[:3] == ["claude", "opencode_go", "codex"]
+    assert dialog.current_page_key() == "codex"
+
+    for _ in range(3):  # the third press is at the top and does nothing
+        qtbot.keyClick(dialog.nav_list, Qt.Key.Key_Up, Qt.KeyboardModifier.AltModifier)
+    assert dialog.provider_order() == [
+        "codex", "claude", "opencode_go", "copilot", "openrouter", "antigravity",
+    ]
+    assert dialog.current_page_key() == "codex"
+
+    # Alt+Down on a non-provider row moves nothing.
+    dialog.show_page("mcp")
+    qtbot.keyClick(dialog.nav_list, Qt.Key.Key_Down, Qt.KeyboardModifier.AltModifier)
+    assert _nav_keys(dialog)[-2:] == ["mcp", "local_usage"]
+    assert dialog.current_page_key() == "mcp"
+
+
+def test_apply_to_writes_the_provider_order(qtbot):
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    dialog.apply_to(config)
+    assert config.provider_order == []
+
+    dialog.move_provider("antigravity", 0)
+    dialog.apply_to(config)
+    assert config.provider_order == [
+        "antigravity", "claude", "codex", "opencode_go", "copilot", "openrouter",
+    ]
+
+    dialog.move_provider("antigravity", 5)
+    dialog.apply_to(config)
+    assert config.provider_order == []
+
+
+def test_apply_to_writes_the_enable_flags_from_the_provider_pages(qtbot):
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    dialog.codex_cb.setChecked(False)
+    dialog.openrouter_cb.setChecked(True)
+    dialog.apply_to(config)
+
+    assert config.providers.codex is False
+    assert config.providers.openrouter is True
