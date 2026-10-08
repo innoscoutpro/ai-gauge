@@ -28,7 +28,7 @@ Anchors below are `path:line` at `main` unless prefixed `dd:` or `inno:`.
 ## Status at the end of 2026-10-08
 
 Everything below is on branch `feature/antigravity-english-profile`, version
-0.8.6, full suite passing (717). Nothing is merged to `main`, pushed or tagged.
+0.8.5, full suite passing (753). Nothing is merged to `main`, pushed or tagged.
 This table is current; the Summary table after it records the first assessment.
 
 | Item | Status |
@@ -300,9 +300,11 @@ release:
 - The process-tree kill on macOS and Linux, covered by a fake only. On Windows
   it was run once against a stand-in tree and returned in 3.3 s.
 - CI on macOS, Ubuntu and Python 3.11; the tests ran on Windows 3.12 only.
-- Done 2026-10-08: changelog entry and version 0.8.6. A patch number was
-  chosen because the provider is opt-in (0.7.5 added the MCP guard the same
-  way) and because the fork has already published its own "0.9.0".
+- Done 2026-10-08: changelog entry and version. Cut as 0.8.6, then folded
+  into 0.8.5 the same day, because 0.8.5 itself had not been published. A
+  patch number was chosen because the provider is opt-in (0.7.5 added the MCP
+  guard the same way) and because the fork has already published its own
+  "0.9.0".
 
 Known limits: the tile has no compact collapse (it behaves like Copilot's), the
 widget's minimum width grows from 240 to 280 px while a four-row tile is shown,

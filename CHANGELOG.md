@@ -2,42 +2,26 @@
 
 ## Unreleased
 
-## 0.8.7 - 2026-10-08
+## 0.8.5 - 2026-10-08
 
 ### Added
 
+- Optional Antigravity tile showing the quota that Google's `agy` CLI reports for Gemini and for Claude and GPT models. It is off by default; turn it on from its Settings page. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@DraftingDreamer](https://github.com/DraftingDreamer).)
 - Providers can be put in any order. Drag one by its grip in the Settings sidebar, or press Alt+Up / Alt+Down; the widget and the tray indicator follow.
 
 ### Changed
 
-- Each provider is now turned on or off from its own Settings page. The checklist on the General page is gone, and a provider that is off shows dimmed in the sidebar.
-
-## 0.8.6 - 2026-10-08
-
-### Added
-
-- Optional Antigravity tile showing the quota that Google's `agy` CLI reports for Gemini and for Claude and GPT models. It is off by default; turn it on in Settings, General. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@DraftingDreamer](https://github.com/DraftingDreamer).)
-
-### Changed
-
 - Settings now lists its pages down the left side. The row of tabs had run out of room, so the window also opens larger.
-
-### Fixed
-
-- AI Gauge now asks for usage pages in English whatever the system language is. Codex usage failed on non-English systems because ChatGPT translated the page. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@DraftingDreamer](https://github.com/DraftingDreamer).)
-- If the Codex usage page still cannot be read by its labels, AI Gauge takes the percentages from the page's progress bars and shows them without a reset time. ([#11](https://github.com/jpajak/ai-gauge/issues/11))
-- A signed-out Claude session is now reported as signed out. It used to show as a page load or retry error. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@innoscoutpro](https://github.com/innoscoutpro).)
-- Browser sign-in now works with Brave installed as a snap on Linux. (Thanks [@innoscoutpro](https://github.com/innoscoutpro).)
-
-## 0.8.5 - 2026-10-05
-
-### Changed
-
+- Each provider is now turned on or off from its own Settings page. The checklist on the General page is gone, and a provider that is off shows dimmed in the sidebar.
 - Removed the obsolete OpenCode browser-session, cookie-paste, and webpage-verification implementation. OpenCode usage now uses only the authenticated Go API introduced in 0.8.4, with a separate API key stored in the system credential store for each configured account. Claude and Codex browser sign-in are unchanged.
 
 ### Fixed
 
 - Restored Codex usage refreshes after ChatGPT moved usage settings to `chatgpt.com/settings/usage?tab=overview`. The collector now reads **5-hour limit**, **Weekly limit**, and **% left** from **Plan limits**, converts remaining allowance to usage, and handles reset countdowns such as **6d 10h**. It selects Overview if Analytics opens, ignores unrelated credit discounts and purchased resets, and updates sign-in verification and usage-page links to the new page.
+- AI Gauge now asks for usage pages in English whatever the system language is. Codex usage failed on non-English systems because ChatGPT translated the page. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@DraftingDreamer](https://github.com/DraftingDreamer).)
+- If the Codex usage page still cannot be read by its labels, AI Gauge takes the percentages from the page's progress bars and shows them without a reset time. ([#11](https://github.com/jpajak/ai-gauge/issues/11))
+- A signed-out Claude session is now reported as signed out. It used to show as a page load or retry error. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@innoscoutpro](https://github.com/innoscoutpro).)
+- Browser sign-in now works with Brave installed as a snap on Linux. (Thanks [@innoscoutpro](https://github.com/innoscoutpro).)
 
 ## 0.8.4 - 2026-09-19
 
