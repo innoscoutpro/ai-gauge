@@ -313,6 +313,97 @@ def test_context_menu_topmost_toggle_persists(qtbot):
     assert config.window.always_on_top is False
 
 
+def _ordered_widget(qtbot, config: Config, providers: list[str]) -> UsageWidget:
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+    for provider in providers:
+        widget.update_snapshot(_ok_snapshot(provider), provider.title())
+    return widget
+
+
+def test_tiles_follow_configured_provider_order(qtbot):
+    config = Config(
+        provider_order=["copilot", "codex", "claude"],
+        browser_accounts=[
+            BrowserAccount(id="claude", kind="claude"),
+            BrowserAccount(id="codex", kind="codex"),
+            BrowserAccount(id="claude-team", kind="claude", name="Team"),
+        ],
+    )
+
+    widget = _ordered_widget(
+        qtbot, config, ["claude-team", "codex", "claude", "copilot"]
+    )
+
+    # Both Claude accounts stay together, in account-list order.
+    assert _tile_order(widget) == ["copilot", "codex", "claude", "claude-team"]
+
+
+def test_apply_provider_order_re_sorts_tiles_and_summary_chips(qtbot):
+    config = Config()
+    widget = _ordered_widget(qtbot, config, ["claude", "codex", "copilot"])
+    widget.set_collapsed(True)
+    assert _tile_order(widget) == ["claude", "codex", "copilot"]
+    assert [t.split()[0] for t in _collapsed_chip_texts(widget)] == [
+        "Claude",
+        "Codex",
+        "Copilot",
+    ]
+
+    config.provider_order = ["copilot", "claude"]
+    widget.apply_provider_order()
+
+    assert _tile_order(widget) == ["copilot", "claude", "codex"]
+    assert [t.split()[0] for t in _collapsed_chip_texts(widget)] == [
+        "Copilot",
+        "Claude",
+        "Codex",
+    ]
+
+
+def test_apply_provider_order_leaves_ordered_layout_untouched(qtbot, monkeypatch):
+    widget = _ordered_widget(qtbot, Config(), ["claude", "codex", "copilot"])
+    before = _tile_order(widget)
+    calls = []
+    layout = widget._tile_layout  # noqa: SLF001
+    monkeypatch.setattr(layout, "removeWidget", lambda w: calls.append(("rm", w)))
+    monkeypatch.setattr(
+        layout, "insertWidget", lambda *a, **k: calls.append(("ins", a))
+    )
+
+    widget.apply_provider_order()
+
+    assert calls == []
+    assert _tile_order(widget) == before
+
+
+def test_apply_provider_order_keeps_non_tile_items_in_place(qtbot):
+    from PyQt6.QtWidgets import QLabel
+
+    config = Config()
+    widget = _ordered_widget(qtbot, config, ["claude", "codex", "copilot"])
+    marker = QLabel("marker")
+    widget._tile_layout.insertWidget(1, marker)  # noqa: SLF001
+
+    config.provider_order = ["copilot", "codex", "claude"]
+    widget.apply_provider_order()
+
+    layout = widget._tile_layout  # noqa: SLF001
+    items = [layout.itemAt(i).widget() for i in range(layout.count())]
+    assert items[1] is marker
+    assert [w.provider for w in items if w is not marker] == [
+        "copilot",
+        "codex",
+        "claude",
+    ]
+
+
+def test_tile_sort_key_ranks_unknown_family_last(qtbot):
+    widget = _ordered_widget(qtbot, Config(), [])
+
+    assert widget._tile_sort_key("mystery")[0] > widget._tile_sort_key("antigravity")[0]  # noqa: SLF001
+
+
 def test_reenabled_provider_returns_to_canonical_order(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)

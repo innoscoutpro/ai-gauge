@@ -28,6 +28,7 @@ from .config import (
     app_data_dir,
     browser_accounts,
     display_name_for_account,
+    provider_order,
     qt_scale_factor_env,
 )
 from .cookie_dialog import CookieDialog
@@ -83,8 +84,10 @@ _LOG_VALUE_LIMIT = 300
 
 def _enabled_providers(config: Config) -> tuple[str, ...]:
     configured_accounts = getattr(config, "browser_accounts", None)
-    out: list[str] = [
-        account.id
+    # (family, id) pairs: the order below groups by family, and sorted() is
+    # stable so accounts of one kind keep their account-list order.
+    entries: list[tuple[str, str]] = [
+        (account.kind, account.id)
         for account in browser_accounts(config)
         if getattr(config.providers, account.kind, False)
     ]
@@ -92,18 +95,21 @@ def _enabled_providers(config: Config) -> tuple[str, ...]:
     # empty list is authoritative and must not resurrect removed accounts.
     if configured_accounts is None:
         if getattr(config.providers, "claude", False):
-            out.append("claude")
+            entries.append(("claude", "claude"))
         if getattr(config.providers, "codex", False):
-            out.append("codex")
+            entries.append(("codex", "codex"))
         if getattr(config.providers, "opencode_go", False):
-            out.append("opencode_go")
+            entries.append(("opencode_go", "opencode_go"))
     if config.providers.copilot:
-        out.append("copilot")
+        entries.append(("copilot", "copilot"))
     if config.providers.openrouter:
-        out.append("openrouter")
+        entries.append(("openrouter", "openrouter"))
     if getattr(config.providers, "antigravity", False):
-        out.append("antigravity")
-    return tuple(out)
+        entries.append(("antigravity", "antigravity"))
+    order = provider_order(config)
+    rank = {kind: index for index, kind in enumerate(order)}
+    entries.sort(key=lambda entry: rank.get(entry[0], len(order)))
+    return tuple(provider_id for _kind, provider_id in entries)
 
 
 def _refresh_provider_order(providers: dict[str, Provider]) -> list[str]:
@@ -486,6 +492,7 @@ class App(QObject):
             if tile_id not in desired_tiles:
                 self._widget.remove_tile(tile_id)
                 self._snapshots.pop(tile_id, None)
+        self._widget.apply_provider_order()
         self._sync_usage_cache()
 
     def _restart_timer(self) -> None:

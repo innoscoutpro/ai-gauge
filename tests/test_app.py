@@ -244,6 +244,95 @@ def test_enabled_providers_includes_multiple_opencode_accounts_when_enabled():
     )
 
 
+def test_enabled_providers_follows_configured_order():
+    config = Config(provider_order=["copilot", "codex", "claude"])
+
+    assert _enabled_providers(config) == ("copilot", "codex", "claude")
+
+
+def test_enabled_providers_groups_interleaved_accounts_by_family():
+    config = Config(
+        browser_accounts=[
+            BrowserAccount(id="claude", kind="claude"),
+            BrowserAccount(id="codex", kind="codex"),
+            BrowserAccount(id="claude-team", kind="claude", name="Team"),
+            BrowserAccount(id="codex-work", kind="codex", name="Work"),
+        ]
+    )
+
+    assert _enabled_providers(config) == (
+        "claude",
+        "claude-team",
+        "codex",
+        "codex-work",
+        "copilot",
+    )
+
+    config.provider_order = ["codex", "claude"]
+
+    assert _enabled_providers(config) == (
+        "codex",
+        "codex-work",
+        "claude",
+        "claude-team",
+        "copilot",
+    )
+
+
+def test_enabled_providers_default_order_matches_default_accounts():
+    config = Config()
+    config.providers.openrouter = True
+    config.providers.antigravity = True
+
+    assert _enabled_providers(config) == (
+        "claude",
+        "codex",
+        "copilot",
+        "openrouter",
+        "antigravity",
+    )
+
+
+def test_enabled_providers_orders_config_like_objects():
+    config = SimpleNamespace(
+        providers=SimpleNamespace(
+            claude=True,
+            codex=True,
+            opencode_go=False,
+            copilot=True,
+            openrouter=False,
+        ),
+        provider_order=["copilot", "claude"],
+    )
+
+    assert _enabled_providers(config) == ("copilot", "claude", "codex")
+
+
+def test_build_providers_re_sorts_the_live_widget(qtbot):
+    config = Config()
+    config.providers.openrouter = False
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+    app = App.__new__(App)
+    app._config = config  # noqa: SLF001
+    app._providers = {}  # noqa: SLF001
+    app._snapshots = {}  # noqa: SLF001
+    app._widget = widget  # noqa: SLF001
+    app._sync_usage_cache = lambda: None  # noqa: SLF001
+    app._build_providers()  # noqa: SLF001
+    assert list(widget._tiles) == ["claude", "codex", "copilot"]  # noqa: SLF001
+
+    config.provider_order = ["copilot", "claude"]
+    app._build_providers()  # noqa: SLF001
+
+    layout = widget._tile_layout  # noqa: SLF001
+    assert [layout.itemAt(i).widget().provider for i in range(layout.count())] == [
+        "copilot",
+        "claude",
+        "codex",
+    ]
+
+
 def test_build_providers_creates_one_provider_per_opencode_account(monkeypatch):
     config = Config(
         browser_accounts=[
@@ -279,6 +368,7 @@ def test_build_providers_creates_one_provider_per_opencode_account(monkeypatch):
         _tiles={},
         ensure_tile=lambda account_id, name: ensured.append((account_id, name)),
         remove_tile=lambda account_id: None,
+        apply_provider_order=lambda: None,
     )
 
     app._build_providers()  # noqa: SLF001
@@ -318,6 +408,7 @@ def test_build_providers_passes_per_account_fable_toggle(monkeypatch):
         _tiles={},
         ensure_tile=lambda account_id, name: None,
         remove_tile=lambda account_id: None,
+        apply_provider_order=lambda: None,
     )
 
     app._build_providers()  # noqa: SLF001

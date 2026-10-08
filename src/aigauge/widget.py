@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import (
 
 from . import __version__
 from .config import (
+    DEFAULT_PROVIDER_ORDER,
     ColorThresholds,
     Config,
     SnapCorner,
@@ -58,6 +59,7 @@ from .config import (
     WINDOW_WIDTH,
     browser_account,
     display_name_for_account,
+    provider_order,
 )
 from .gauge import color_for_percent, thresholds_for_provider
 from .icons import app_icon
@@ -81,14 +83,9 @@ MIN_LABEL_WIDTH = 56
 PACE_TICK_OVERHANG = 2
 CHIP_NOTCH_HEIGHT = 4
 CHIP_NOTCH_HALF_WIDTH = 3.5
-PROVIDER_ORDER = (
-    "claude",
-    "codex",
-    "opencode_go",
-    "copilot",
-    "openrouter",
-    "antigravity",
-)
+# Default display order. The live order is the user's saved one, read through
+# provider_order(config); this alias is kept for callers that want the default.
+PROVIDER_ORDER = DEFAULT_PROVIDER_ORDER
 COLLAPSED_MIN_HEIGHT = WINDOW_COLLAPSED_MIN_HEIGHT
 EXPANDED_MIN_WIDTH = WINDOW_MIN_WIDTH
 COLLAPSED_MIN_WIDTH = WINDOW_COLLAPSED_MIN_WIDTH
@@ -123,14 +120,6 @@ def _provider_family(provider: str) -> str:
     if provider == "opencode_go" or provider.startswith("opencode_go-"):
         return "opencode_go"
     return provider
-
-
-def _provider_sort_key(provider: str) -> tuple[int, str]:
-    family = _provider_family(provider)
-    try:
-        return (PROVIDER_ORDER.index(family), provider)
-    except ValueError:
-        return (len(PROVIDER_ORDER), provider)
 
 
 def _claude_weekly_limit_hit(snapshot: UsageSnapshot | None) -> bool:
@@ -1910,21 +1899,45 @@ class UsageWidget(QWidget):
         return thresholds_for_provider(self._config, provider)
 
     def _tile_sort_key(self, provider: str) -> tuple[int, int, str]:
-        account_ids = [
-            account.id
+        accounts = [
+            account
             for account in getattr(self._config, "browser_accounts", [])
             if account.kind in ("claude", "codex", "opencode_go")
         ]
+        account_ids = [account.id for account in accounts]
+        order = provider_order(self._config)
         if provider in account_ids:
-            account = next(
-                account
-                for account in self._config.browser_accounts
-                if account.id == provider
-            )
-            family_rank = PROVIDER_ORDER.index(account.kind)
-            return (family_rank, account_ids.index(provider), provider)
-        family_rank, fallback = _provider_sort_key(provider)
-        return (family_rank, 10_000, fallback)
+            position = account_ids.index(provider)
+            family = accounts[position].kind
+        else:
+            position = 10_000
+            family = _provider_family(provider)
+        # A family the order does not name ranks after every named one.
+        rank = order.index(family) if family in order else len(order)
+        return (rank, position, provider)
+
+    def apply_provider_order(self) -> None:
+        """Re-sort the existing tiles and summary chips into the saved order.
+
+        Tiles move only among the layout slots they already occupy, so any
+        non-tile item keeps its position. A layout already in order is left
+        alone.
+        """
+        slots: list[int] = []
+        current: list[_ProviderTile] = []
+        for i in range(self._tile_layout.count()):
+            item_widget = self._tile_layout.itemAt(i).widget()
+            if isinstance(item_widget, _ProviderTile):
+                slots.append(i)
+                current.append(item_widget)
+        wanted = sorted(current, key=lambda tile: self._tile_sort_key(tile.provider))
+        if wanted != current:
+            for tile in current:
+                self._tile_layout.removeWidget(tile)
+            for slot, tile in zip(slots, wanted):
+                self._tile_layout.insertWidget(slot, tile)
+            self._tile_layout.invalidate()
+        self._refresh_collapsed_summary()
 
     def _insert_tile_in_provider_order(
         self, provider: str, tile: _ProviderTile

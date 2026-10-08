@@ -853,6 +853,7 @@ def _provider_app(config):
     app._widget = SimpleNamespace(
         _tiles={}, ensure_tile=lambda name, label: app._widget._tiles.setdefault(name, label),
         remove_tile=lambda name: app._widget._tiles.pop(name, None),
+        apply_provider_order=lambda: None,
     )
     app._sync_usage_cache = lambda: None
     return app

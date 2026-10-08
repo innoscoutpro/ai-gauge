@@ -76,6 +76,7 @@ def test_app_builds_antigravity_provider_with_config_and_tile(monkeypatch):
         _tiles={},
         ensure_tile=lambda account_id, label: ensured.append((account_id, label)),
         remove_tile=lambda account_id: None,
+        apply_provider_order=lambda: None,
     )
 
     assert "antigravity" in _enabled_providers(config)
@@ -292,7 +293,10 @@ def test_disabled_antigravity_builds_no_provider_and_never_touches_agy(monkeypat
     app._providers = {}
     app._snapshots = {}
     app._widget = SimpleNamespace(
-        _tiles={}, ensure_tile=lambda *a: None, remove_tile=lambda *a: None
+        _tiles={},
+        ensure_tile=lambda *a: None,
+        remove_tile=lambda *a: None,
+        apply_provider_order=lambda: None,
     )
     app._sync_usage_cache = lambda: None
 
