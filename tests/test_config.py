@@ -399,3 +399,39 @@ def test_load_clamps_saved_window_size():
 
     assert c.window.width == 900
     assert c.window.height == 80
+
+
+def test_provider_order_defaults_to_the_built_in_order():
+    c = Config()
+
+    assert c.provider_order == []
+    assert config_module.provider_order(c) == config_module.DEFAULT_PROVIDER_ORDER
+
+
+def test_provider_order_puts_saved_kinds_first_then_the_rest():
+    c = Config(provider_order=["openrouter", "claude"])
+
+    assert config_module.provider_order(c) == (
+        "openrouter",
+        "claude",
+        "codex",
+        "opencode_go",
+        "copilot",
+        "antigravity",
+    )
+
+
+def test_provider_order_drops_unknown_and_repeated_kinds():
+    c = Config(provider_order=["codex", "nope", "codex", "claude"])
+
+    assert config_module.provider_order(c)[:2] == ("codex", "claude")
+    assert sorted(config_module.provider_order(c)) == sorted(
+        config_module.DEFAULT_PROVIDER_ORDER
+    )
+
+
+def test_provider_order_survives_a_save_and_load():
+    c = Config(provider_order=["antigravity", "claude"])
+    c.save()
+
+    assert Config.load().provider_order == ["antigravity", "claude"]

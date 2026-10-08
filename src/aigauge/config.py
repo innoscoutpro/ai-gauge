@@ -110,6 +110,16 @@ class WindowState(BaseModel):
     ui_scale: float = Field(default=1.0, ge=0.75, le=4.0)
 
 
+DEFAULT_PROVIDER_ORDER: tuple[str, ...] = (
+    "claude",
+    "codex",
+    "opencode_go",
+    "copilot",
+    "openrouter",
+    "antigravity",
+)
+
+
 class ProviderToggles(BaseModel):
     claude: bool = True
     codex: bool = True
@@ -227,6 +237,10 @@ class Config(BaseModel):
     openrouter: OpenRouterConfig = Field(default_factory=OpenRouterConfig)
     antigravity: AntigravityConfig = Field(default_factory=AntigravityConfig)
     opencode_go: OpenCodeGoConfig = Field(default_factory=OpenCodeGoConfig)
+    # Provider kinds in the order the user arranged them. Empty means the
+    # default order; read it through provider_order(), which also places any
+    # kind this list does not mention.
+    provider_order: list[str] = Field(default_factory=list)
     expanded_tiles: list[str] = Field(default_factory=list)
     collapsed_tiles: list[str] = Field(default_factory=list)
     # Disabled by default so normal GUI usage publishes no MCP cache.
@@ -382,6 +396,18 @@ def account_display_name(account: BrowserAccount) -> str:
     base = provider_base_name(account.kind)
     label = (account.name or "").strip()
     return f"{base} ({label})" if label else base
+
+
+def provider_order(config: Config) -> tuple[str, ...]:
+    """Return every provider kind in display order.
+
+    The saved order comes first. Kinds it does not mention, such as a provider
+    added in a later version, follow in the default order.
+    """
+    saved = getattr(config, "provider_order", None) or ()
+    order = [kind for kind in dict.fromkeys(saved) if kind in DEFAULT_PROVIDER_ORDER]
+    order.extend(kind for kind in DEFAULT_PROVIDER_ORDER if kind not in order)
+    return tuple(order)
 
 
 def browser_accounts(
