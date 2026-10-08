@@ -42,6 +42,9 @@ def get_profile(provider: str) -> QWebEngineProfile:
         QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies
     )
     profile.setHttpUserAgent(_REALISTIC_UA)
+    # Providers pick the page language from Accept-Language, which would
+    # otherwise follow the OS language; the extractors match English labels.
+    profile.setHttpAcceptLanguage("en-US,en")
 
     log.info(
         "webengine profile created provider=%s storage=%s cache=%s ua=%r "
