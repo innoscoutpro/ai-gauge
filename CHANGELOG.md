@@ -17,9 +17,9 @@
 
 ### Fixed
 
-- Restored Codex usage refreshes after ChatGPT moved usage settings to `chatgpt.com/settings/usage?tab=overview`. The collector now reads **5-hour limit**, **Weekly limit**, and **% left** from **Plan limits**, converts remaining allowance to usage, and handles reset countdowns such as **6d 10h**. It selects Overview if Analytics opens, ignores unrelated credit discounts and purchased resets, and updates sign-in verification and usage-page links to the new page.
+- Restored Codex usage refreshes after ChatGPT moved usage settings to `chatgpt.com/settings/usage?tab=overview`. The collector now reads **5-hour limit**, **Weekly limit**, and **% left** from **Plan limits**, converts remaining allowance to usage, and handles reset countdowns such as **6d 10h**. It selects Overview if Analytics opens, ignores unrelated credit discounts and purchased resets, and updates sign-in verification and usage-page links to the new page. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@innoscoutpro](https://github.com/innoscoutpro) and [@DraftingDreamer](https://github.com/DraftingDreamer).)
 - AI Gauge now asks for usage pages in English whatever the system language is. Codex usage failed on non-English systems because ChatGPT translated the page. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@DraftingDreamer](https://github.com/DraftingDreamer).)
-- If the Codex usage page still cannot be read by its labels, AI Gauge takes the percentages from the page's progress bars and shows them without a reset time. ([#11](https://github.com/jpajak/ai-gauge/issues/11))
+- If the Codex usage page still cannot be read by its labels, AI Gauge takes the percentages from the page's progress bars and shows them without a reset time. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@DraftingDreamer](https://github.com/DraftingDreamer).)
 - A signed-out Claude session is now reported as signed out. It used to show as a page load or retry error. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@innoscoutpro](https://github.com/innoscoutpro).)
 - Browser sign-in now works with Brave installed as a snap on Linux. (Thanks [@innoscoutpro](https://github.com/innoscoutpro).)
 
