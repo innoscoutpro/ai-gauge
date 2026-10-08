@@ -4,7 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PyQt6.QtWidgets import QTabWidget
 
 from aigauge import app as app_module
 from aigauge.config import BrowserAccount, Config, app_data_dir
@@ -36,13 +35,13 @@ def test_tracking_is_off_by_default_and_reads_nothing(qtbot, monkeypatch):
     assert not panel.import_btn.isEnabled()
 
 
-def test_settings_dialog_has_local_usage_tab(qtbot):
+def test_settings_dialog_has_local_usage_page(qtbot):
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
 
-    tabs = dialog.findChild(QTabWidget)
-    names = [tabs.tabText(i) for i in range(tabs.count())]
-    assert "Local usage" in names
+    assert "local_usage" in dialog.page_keys()
+    dialog.show_page("local_usage")
+    assert dialog.page_widget("local_usage").widget() is dialog.local_usage_panel
 
 
 def test_single_account_is_preselected_and_saved_by_id(qtbot):

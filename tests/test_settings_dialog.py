@@ -500,3 +500,95 @@ def test_mcp_policy_for_removed_account_is_not_saved(qtbot, monkeypatch):
 
     assert "claude" in config.mcp_pause_policies
     assert "codex" not in config.mcp_pause_policies
+
+
+_PAGE_KEYS = [
+    "general", "claude", "codex", "opencode_go", "copilot",
+    "openrouter", "antigravity", "mcp", "local_usage",
+]
+
+
+def test_settings_pages_are_listed_in_order_and_general_is_selected(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    assert dialog.page_keys() == _PAGE_KEYS
+    assert dialog.current_page_key() == "general"
+    assert [
+        dialog.nav_list.item(i).text() for i in range(dialog.nav_list.count())
+    ] == [
+        "General", "PROVIDERS", "Claude", "Codex", "OpenCode", "GitHub Copilot",
+        "OpenRouter", "Antigravity", "TOOLS", "MCP", "Local usage",
+    ]
+
+
+def test_every_settings_page_key_resolves_to_a_page(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    widgets = []
+    for key in _PAGE_KEYS:
+        widget = dialog.page_widget(key)
+        assert widget is not None
+        widgets.append(widget)
+        dialog.show_page(key)
+        assert dialog.pages.currentWidget() is widget
+    assert len({id(w) for w in widgets}) == len(_PAGE_KEYS)
+
+
+def test_settings_caption_rows_cannot_be_selected(qtbot):
+    from PyQt6.QtCore import Qt
+
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    captions = [
+        dialog.nav_list.item(i)
+        for i in range(dialog.nav_list.count())
+        if dialog.nav_list.item(i).data(Qt.ItemDataRole.UserRole) is None
+    ]
+    assert [c.text() for c in captions] == ["PROVIDERS", "TOOLS"]
+    for caption in captions:
+        assert caption.flags() == Qt.ItemFlag.NoItemFlags
+        assert not caption.isSelected()
+    # Arrow keys step over a caption: General -> Claude, Antigravity -> MCP.
+    dialog.show()
+    dialog.nav_list.setFocus()
+    qtbot.keyClick(dialog.nav_list, Qt.Key.Key_Down)
+    assert dialog.current_page_key() == "claude"
+    dialog.show_page("antigravity")
+    qtbot.keyClick(dialog.nav_list, Qt.Key.Key_Down)
+    assert dialog.current_page_key() == "mcp"
+    qtbot.keyClick(dialog.nav_list, Qt.Key.Key_Up)
+    assert dialog.current_page_key() == "antigravity"
+
+
+def test_settings_row_and_page_stay_in_sync(qtbot):
+    from PyQt6.QtCore import Qt
+
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    dialog.show_page("mcp")
+    assert dialog.nav_list.currentItem().data(Qt.ItemDataRole.UserRole) == "mcp"
+    assert dialog.pages.currentWidget() is dialog.page_widget("mcp")
+
+    row = next(
+        i
+        for i in range(dialog.nav_list.count())
+        if dialog.nav_list.item(i).data(Qt.ItemDataRole.UserRole) == "codex"
+    )
+    dialog.nav_list.setCurrentRow(row)
+    assert dialog.pages.currentWidget() is dialog.page_widget("codex")
+    assert dialog.current_page_key() == "codex"
+
+
+def test_show_provider_lands_on_each_provider_page(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    for kind in ("claude", "codex", "opencode_go", "copilot", "openrouter", "antigravity"):
+        dialog.show_page("general")
+        dialog.show_provider(kind)
+        assert dialog.current_page_key() == kind
+        assert dialog.pages.currentWidget() is dialog.page_widget(kind)

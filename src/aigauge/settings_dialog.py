@@ -29,14 +29,16 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QStackedWidget,
     QFrame,
     QScrollArea,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -126,24 +128,28 @@ QGroupBox::title {
     background: #1f2937;
     color: #f3f4f6;
 }
-QTabWidget::pane {
-    border: 1px solid #374151;
-    border-radius: 6px;
-    top: -1px;
-}
-QTabBar::tab {
+QListWidget#settings_nav {
     background: #111827;
     color: #cbd5e1;
     border: 1px solid #374151;
-    border-bottom: none;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
-    padding: 6px 14px;
-    margin-right: 2px;
+    border-radius: 6px;
+    padding: 4px;
+    outline: none;
 }
-QTabBar::tab:selected {
+QListWidget#settings_nav::item {
+    padding: 4px 10px;
+    border-radius: 4px;
+}
+QListWidget#settings_nav::item:selected {
+    background: #2563eb;
+    color: #f9fafb;
+}
+QListWidget#settings_nav::item:hover:!selected {
     background: #1f2937;
-    color: #f3f4f6;
+}
+QStackedWidget#settings_pages {
+    border: 1px solid #374151;
+    border-radius: 6px;
 }
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
     background: #111827;
@@ -641,6 +647,26 @@ class _BrowserAccountRow(QWidget):
         )
 
 
+_NAV_WIDTH = 150
+# (key, label) rows; (None, text) is a caption row that cannot be selected.
+_NAV_ENTRIES: tuple[tuple[str | None, str], ...] = (
+    ("general", "General"),
+    (None, "PROVIDERS"),
+    ("claude", "Claude"),
+    ("codex", "Codex"),
+    ("opencode_go", "OpenCode"),
+    ("copilot", "GitHub Copilot"),
+    ("openrouter", "OpenRouter"),
+    ("antigravity", "Antigravity"),
+    (None, "TOOLS"),
+    ("mcp", "MCP"),
+    ("local_usage", "Local usage"),
+)
+_PROVIDER_PAGE_KEYS = frozenset(
+    {"claude", "codex", "opencode_go", "copilot", "openrouter", "antigravity"}
+)
+
+
 class SettingsDialog(QDialog):
     sign_in_clicked = pyqtSignal(str)  # provider name
     paste_cookie_clicked = pyqtSignal(str)  # provider name
@@ -655,8 +681,11 @@ class SettingsDialog(QDialog):
         # this existing Settings window back to the foreground.
         self.setWindowTitle("AI Gauge — Settings")
         self.setModal(False)
-        self.resize(620, 520)
-        self.setMinimumSize(560, 420)
+        # The layout minimum is the real floor (Claude is the widest page,
+        # General the tallest): 150 px list + 10 gap + a page area as wide as
+        # a tab page was (about 615 px) + margins.
+        self.resize(800, 620)
+        self.setMinimumSize(790, 420)
         self.setStyleSheet(_build_stylesheet())
         self._config = config
         self._browser_account_rows: list[_BrowserAccountRow] = []
@@ -1230,16 +1259,6 @@ class SettingsDialog(QDialog):
         mcp_layout.addWidget(command)
         mcp_layout.addStretch(1)
 
-        tabs = QTabWidget()
-        self.tabs = tabs
-        tabs.addTab(general_tab, "General")
-        tabs.addTab(claude_tab, "Claude")
-        tabs.addTab(codex_tab, "Codex")
-        tabs.addTab(opencode_go_tab, "OpenCode")
-        tabs.addTab(copilot_tab, "GitHub Copilot")
-        tabs.addTab(openrouter_tab, "OpenRouter")
-        tabs.addTab(antigravity_tab, "Antigravity")
-        tabs.addTab(mcp_tab, "MCP")
         self.local_usage_panel = LocalUsagePanel(
             config, self._browser_accounts, local_usage_service
         )
@@ -1247,8 +1266,47 @@ class SettingsDialog(QDialog):
         local_usage_scroll.setWidgetResizable(True)
         local_usage_scroll.setFrameShape(QFrame.Shape.NoFrame)
         local_usage_scroll.setWidget(self.local_usage_panel)
-        tabs.addTab(local_usage_scroll, "Local usage")
-        tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        pages = {
+            "general": general_tab,
+            "claude": claude_tab,
+            "codex": codex_tab,
+            "opencode_go": opencode_go_tab,
+            "copilot": copilot_tab,
+            "openrouter": openrouter_tab,
+            "antigravity": antigravity_tab,
+            "mcp": mcp_tab,
+            "local_usage": local_usage_scroll,
+        }
+        self.nav_list = QListWidget()
+        self.nav_list.setObjectName("settings_nav")
+        self.nav_list.setFixedWidth(_NAV_WIDTH)
+        self.nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.pages = QStackedWidget()
+        self.pages.setObjectName("settings_pages")
+        self.pages.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._page_rows: dict[str, int] = {}
+        self._page_indexes: dict[str, int] = {}
+        caption_font = self.nav_list.font()
+        caption_font.setPointSizeF(max(6.0, caption_font.pointSizeF() * 0.8))
+        caption_font.setBold(True)
+        for entry in _NAV_ENTRIES:
+            if entry[0] is None:
+                caption = QListWidgetItem(entry[1])
+                caption.setFlags(Qt.ItemFlag.NoItemFlags)
+                caption.setFont(caption_font)
+                caption.setForeground(QColor("#6b7280"))
+                self.nav_list.addItem(caption)
+                continue
+            key, label = entry
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            self.nav_list.addItem(item)
+            self._page_rows[key] = self.nav_list.count() - 1
+            self._page_indexes[key] = self.pages.addWidget(pages[key])
+        self.nav_list.currentRowChanged.connect(self._on_nav_row_changed)
+        self.show_page("general")
 
         # ----- Brand header -----
         # Settings is the roomiest recurring surface in the app, so it can
@@ -1308,20 +1366,40 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 10)
         layout.setSpacing(10)
         layout.addLayout(brand_header)
-        layout.addWidget(tabs, 1)
+        body = QHBoxLayout()
+        body.setSpacing(10)
+        body.addWidget(self.nav_list)
+        body.addWidget(self.pages, 1)
+        layout.addLayout(body, 1)
         layout.addLayout(button_row)
 
+    def page_keys(self) -> list[str]:
+        return list(self._page_rows)
+
+    def current_page_key(self) -> str:
+        item = self.nav_list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
+
+    def page_widget(self, key: str) -> QWidget:
+        return self.pages.widget(self._page_indexes[key])
+
+    def show_page(self, key: str) -> None:
+        """Select the row and show the page for `key`."""
+        row = self._page_rows[key]
+        if self.nav_list.currentRow() != row:
+            self.nav_list.setCurrentRow(row)  # the row signal shows the page
+        else:
+            self.pages.setCurrentIndex(self._page_indexes[key])
+
+    def _on_nav_row_changed(self, row: int) -> None:
+        item = self.nav_list.item(row)
+        key = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if key in self._page_indexes:
+            self.pages.setCurrentIndex(self._page_indexes[key])
+
     def show_provider(self, kind: str, account_id: str | None = None) -> None:
-        tab_index = {
-            "claude": 1,
-            "codex": 2,
-            "opencode_go": 3,
-            "copilot": 4,
-            "openrouter": 5,
-            "antigravity": 6,
-        }.get(kind)
-        if tab_index is not None:
-            self.tabs.setCurrentIndex(tab_index)
+        if kind in _PROVIDER_PAGE_KEYS:
+            self.show_page(kind)
         if account_id is None:
             return
         row = next(

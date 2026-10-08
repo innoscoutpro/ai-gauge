@@ -98,9 +98,6 @@ def test_settings_dialog_shows_and_saves_antigravity_options(qtbot, monkeypatch)
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
 
-    index = next(
-        i for i in range(dialog.tabs.count()) if dialog.tabs.tabText(i) == "Antigravity"
-    )
     assert dialog.antigravity_cli_path_edit.text() == ""
     assert dialog.antigravity_cli_path_edit.placeholderText() == (
         "Auto-detect (agy-test)"
@@ -114,10 +111,12 @@ def test_settings_dialog_shows_and_saves_antigravity_options(qtbot, monkeypatch)
     assert config.antigravity.show_gemini is False
     assert config.antigravity.cli_path is None
     dialog.show_provider("antigravity")
-    assert dialog.tabs.currentIndex() == index
-    # The tab sits after OpenRouter and before MCP.
-    assert dialog.tabs.tabText(index - 1) == "OpenRouter"
-    assert dialog.tabs.tabText(index + 1) == "MCP"
+    assert dialog.current_page_key() == "antigravity"
+    # The page sits after OpenRouter and before the TOOLS caption.
+    keys = dialog.page_keys()
+    index = keys.index("antigravity")
+    assert keys[index - 1] == "openrouter"
+    assert keys[index + 1] == "mcp"
 
 
 def _dialog(qtbot, monkeypatch, config=None, autodetected=None):
