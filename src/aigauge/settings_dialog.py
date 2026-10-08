@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import sys
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 
-from PyQt6.QtCore import QPointF, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QDir, QPointF, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QDesktopServices,
@@ -20,6 +22,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -62,7 +65,11 @@ from .local_usage.settings_panel import LocalUsagePanel
 from .logging_setup import log_path
 from .providers.claude import CLAUDE_USAGE_URL
 from .providers.codex import CODEX_USAGE_URL
-from .providers.antigravity import resolve_cli
+from .providers.antigravity import (
+    is_agy_file_name,
+    normalize_cli_path,
+    resolve_cli,
+)
 from .startup import set_start_at_login
 from .webview.cookies import clear_browser_session  # lazy inside; no WebEngine at import
 
@@ -1042,25 +1049,55 @@ class SettingsDialog(QDialog):
         self.antigravity_show_gemini_cb = QCheckBox("Gemini models")
         self.antigravity_show_gemini_cb.setChecked(config.antigravity.show_gemini)
         antigravity_form.addRow("Show:", self.antigravity_show_gemini_cb)
-        self.antigravity_show_third_party_cb = QCheckBox("Claude & GPT models")
+        # "&&" is a literal ampersand; a single one is a mnemonic and vanishes.
+        self.antigravity_show_third_party_cb = QCheckBox("Claude && GPT models")
         self.antigravity_show_third_party_cb.setChecked(
             config.antigravity.show_third_party
         )
         antigravity_form.addRow("", self.antigravity_show_third_party_cb)
+        self.antigravity_cli_path_edit = QLineEdit(config.antigravity.cli_path or "")
+        # Looked up once, when the dialog opens; the status line reuses it.
         try:
-            cli_path = resolve_cli(config.antigravity.cli_path)
+            self._antigravity_detected_cli = resolve_cli(None)
         except OSError:
-            cli_path = None
-        self.antigravity_cli_path_label = QLabel(cli_path or "agy CLI not found")
-        self.antigravity_cli_path_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
+            self._antigravity_detected_cli = None
+        self.antigravity_cli_path_edit.setPlaceholderText(
+            f"Auto-detect ({self._antigravity_detected_cli})"
+            if self._antigravity_detected_cli
+            else "Auto-detect"
         )
-        antigravity_form.addRow("agy CLI:", self.antigravity_cli_path_label)
+        cli_path_row = QWidget()
+        cli_path_layout = QHBoxLayout(cli_path_row)
+        cli_path_layout.setContentsMargins(0, 0, 0, 0)
+        cli_path_layout.setSpacing(8)
+        cli_path_layout.addWidget(self.antigravity_cli_path_edit, 1)
+        self.antigravity_cli_browse_button = QPushButton("Browse…")
+        self.antigravity_cli_browse_button.clicked.connect(
+            self._browse_antigravity_cli
+        )
+        cli_path_layout.addWidget(self.antigravity_cli_browse_button)
+        antigravity_form.addRow("agy CLI:", cli_path_row)
+        self.antigravity_cli_path_status = QLabel()
+        self.antigravity_cli_path_status.setWordWrap(True)
+        self.antigravity_cli_path_status.setMaximumWidth(460)
+        antigravity_form.addRow("", self.antigravity_cli_path_status)
+        # The check touches the filesystem, so it runs when editing ends (and
+        # after Browse), never per keystroke on the GUI thread.
+        self.antigravity_cli_path_edit.editingFinished.connect(
+            self._update_antigravity_cli_status
+        )
+        self.antigravity_cli_path_edit.textEdited.connect(
+            self._mark_antigravity_cli_unchecked
+        )
+        self._update_antigravity_cli_status()
         antigravity_form.addRow(
             "",
             _hint_label(
                 "Usage comes from the local Antigravity CLI (agy --print /quota). "
-                "No account or API key is needed."
+                "No account or API key is needed. Leave the path empty to "
+                "auto-detect agy. A path you set must be a file named agy: that "
+                "catches a mistyped or wrong file, it does not check what the "
+                "program is."
             ),
         )
         self.antigravity_colors = _ColorThresholdLauncher(config.antigravity.colors)
@@ -1625,6 +1662,42 @@ class SettingsDialog(QDialog):
         index = self.sign_in_browser_combo.findData(browser_id)
         self.sign_in_browser_combo.setCurrentIndex(index if index >= 0 else 0)
 
+    def _browse_antigravity_cli(self) -> None:
+        file_filter = (
+            "agy (agy.exe);;Programs (*.exe);;All files (*)"
+            if sys.platform == "win32"
+            else "All files (*)"
+        )
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Antigravity CLI",
+            normalize_cli_path(self.antigravity_cli_path_edit.text()) or "",
+            file_filter,
+        )
+        if selected:
+            self.antigravity_cli_path_edit.setText(QDir.toNativeSeparators(selected))
+            self._update_antigravity_cli_status()
+
+    def _mark_antigravity_cli_unchecked(self) -> None:
+        self.antigravity_cli_path_status.setText(
+            "The path is checked when you leave the field."
+        )
+
+    def _update_antigravity_cli_status(self) -> None:
+        configured_path = normalize_cli_path(self.antigravity_cli_path_edit.text())
+        if configured_path:
+            if not Path(configured_path).is_file():
+                status = f"Not found: {configured_path}"
+            elif not is_agy_file_name(configured_path):
+                status = f"File is not named agy: {configured_path}"
+            else:
+                status = f"Using: {configured_path}"
+        elif self._antigravity_detected_cli:
+            status = f"Using auto-detected: {self._antigravity_detected_cli}"
+        else:
+            status = "agy CLI not found. Install the Antigravity CLI or set its path."
+        self.antigravity_cli_path_status.setText(status)
+
     def apply_to(self, config: Config) -> None:
         config.refresh_interval_minutes = self.refresh_spin.value()
         config.active_refresh_interval_minutes = min(
@@ -1691,6 +1764,9 @@ class SettingsDialog(QDialog):
         config.antigravity.show_gemini = self.antigravity_show_gemini_cb.isChecked()
         config.antigravity.show_third_party = (
             self.antigravity_show_third_party_cb.isChecked()
+        )
+        config.antigravity.cli_path = normalize_cli_path(
+            self.antigravity_cli_path_edit.text()
         )
         config.antigravity.colors = self.antigravity_colors.value()
         # Keep the legacy singleton fields synchronized for downgrade safety;
