@@ -25,6 +25,66 @@ git fetch --no-tags https://github.com/innoscoutpro/ai-gauge.git "+refs/heads/*:
 
 Anchors below are `path:line` at `main` unless prefixed `dd:` or `inno:`.
 
+## Status at the end of 2026-10-08
+
+Everything below is on branch `feature/antigravity-english-profile`, version
+0.8.6, full suite passing (717). Nothing is merged to `main`, pushed or tagged.
+This table is current; the Summary table after it records the first assessment.
+
+| Item | Status |
+|---|---|
+| N1 Claude sign-in, snap Brave | Done: three cherry-picks by innoscoutpro plus the test fix |
+| N2 Codex hardening | Done: JS-side layout flags, `% left` readiness, `aria-pressed`, weekly stop label |
+| N3 CI hardening | Done for permissions, exit codes and a manual trigger on `test.yml` |
+| N4 Test portability | Done, with a remainder (below) |
+| N5 Codex in other languages | Done: English `Accept-Language`, and the progress-bar fallback |
+| D1 Antigravity | Done, checked against a real free-plan `agy` |
+| D6 Settings side list | Done |
+| D2 resets, D4 build isolation and GUI smoke, D5 READMEs | Parked; triggers not fired |
+
+**Owed before tagging.**
+
+- Run the app from the branch: the Antigravity tile, the Settings dialog at
+  other UI scales, and the Codex and Claude tiles. None of these was looked at
+  in the running app.
+- Push the branch and run the `test` workflow by hand. macOS, Ubuntu and
+  Python 3.11 have not run any of this. The workflow changes themselves cannot
+  be exercised before a push, and the release job's narrowed token is first
+  proven by the next tag.
+- Post the reply on #11.
+
+**Left open, each with its trigger.**
+
+- *Release workflow manual trigger.* Not taken: it rewrites how `release.yml`
+  finds the version and cannot be tried before a tag. **Trigger:** wanting a
+  packaging run without tagging.
+- *Time zones east of UTC+9.* With `TZ` set (it works on Windows), three tests
+  in `tests/test_local_usage_usage_tab.py` and
+  `tests/test_local_usage_trend_tab.py` still fail from nine hours east onward:
+  `test_unpriced_models_use_clear_names_and_keep_total_readable` (+9, +10),
+  `test_range_selector_defaults_to_this_week_and_covers_all_ranges` (+11),
+  `test_marking_a_limit_change_keeps_and_compares_older_data` (+12 to +14).
+  Not investigated. **Trigger:** a contributor in those zones.
+- *Codex fallback reach.* It fires only when no tab is labelled "Overview",
+  which is the translated-page case. On an English page whose limit wording
+  changes, the extractor keeps waiting and ends on "extractor retry limit
+  exceeded" as before. Sign-in verification (`src/aigauge/webview/targets.py`,
+  `VERIFY_TARGETS["codex"]`) is still label-only. **Trigger:** a report from a
+  user whose page stays non-English despite the header, or the next ChatGPT
+  wording change.
+- *Antigravity page gap.* A tall gap under the status line; the form rows do
+  not honour height-for-width. Cosmetic. **Trigger:** the next change to that
+  page.
+- *Antigravity on a paid plan.* The 5-hour rows rest on the fork's synthetic
+  fixture, and the tile has no compact collapse. **Trigger:** a paid-plan
+  reply from DraftingDreamer.
+
+**Live page facts gathered 2026-10-08 (Pro plan, English).** The Overview page
+has exactly two `<progress>` elements, with `max="100"` and `value` as
+attributes. The Credits and "Usage limit resets" sections add none. On the
+Analytics tab the same two stay in the DOM, hidden, with current values, and
+no others appear.
+
 ## Summary
 
 | Item | Decision | Size |

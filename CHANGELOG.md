@@ -8,9 +8,16 @@
 
 - Optional Antigravity tile showing the quota that Google's `agy` CLI reports for Gemini and for Claude and GPT models. It is off by default; turn it on in Settings, General. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@DraftingDreamer](https://github.com/DraftingDreamer).)
 
+### Changed
+
+- Settings now lists its pages down the left side. The row of tabs had run out of room, so the window also opens larger.
+
 ### Fixed
 
 - AI Gauge now asks for usage pages in English whatever the system language is. Codex usage failed on non-English systems because ChatGPT translated the page. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@DraftingDreamer](https://github.com/DraftingDreamer).)
+- If the Codex usage page still cannot be read by its labels, AI Gauge takes the percentages from the page's progress bars and shows them without a reset time. ([#11](https://github.com/jpajak/ai-gauge/issues/11))
+- A signed-out Claude session is now reported as signed out. It used to show as a page load or retry error. ([#11](https://github.com/jpajak/ai-gauge/issues/11), thanks [@innoscoutpro](https://github.com/innoscoutpro).)
+- Browser sign-in now works with Brave installed as a snap on Linux. (Thanks [@innoscoutpro](https://github.com/innoscoutpro).)
 
 ## 0.8.5 - 2026-10-05
 
