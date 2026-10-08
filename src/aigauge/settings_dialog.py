@@ -814,7 +814,7 @@ class SettingsDialog(QDialog):
 
         providers_hint = _hint_label(
             "Show or hide provider groups in the widget. Manage multiple Claude, "
-            "Codex, or OpenCode accounts from their tabs."
+            "Codex, or OpenCode accounts from their pages."
         )
         providers_layout.addWidget(providers_hint)
 
@@ -854,7 +854,7 @@ class SettingsDialog(QDialog):
         claude_accounts_layout.addWidget(
             _hint_label(
                 "Name each Claude subscription here. All accounts appear when "
-                "Claude is enabled on the General tab. <b>Sign in</b> opens a "
+                "Claude is enabled on the General page. <b>Sign in</b> opens a "
                 "real installed browser and supports Google and passkeys; the "
                 "session is connected automatically."
             )
@@ -880,7 +880,7 @@ class SettingsDialog(QDialog):
         codex_accounts_layout.addWidget(
             _hint_label(
                 "Name each Codex subscription here. All accounts appear when "
-                "Codex is enabled on the General tab. <b>Sign in</b> opens a "
+                "Codex is enabled on the General page. <b>Sign in</b> opens a "
                 "real installed browser and supports Google and passkeys; the "
                 "session is connected automatically."
             )
