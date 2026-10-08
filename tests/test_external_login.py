@@ -77,7 +77,8 @@ def test_linux_snap_brave_launcher_is_detected(monkeypatch, tmp_path):
     assert find_supported_browser("brave") == launcher
 
 
-def test_snap_brave_profile_uses_snap_writable_directory():
+def test_snap_brave_profile_uses_snap_writable_directory(monkeypatch):
+    monkeypatch.setattr(external_login.sys, "platform", "linux")
     root = external_login._browser_profile_root(Path("/snap/bin/brave"))
     assert root == Path.home() / "snap/brave/common/ai-gauge-signin"
     assert external_login._browser_profile_root(Path("/usr/bin/brave-browser")) == (
