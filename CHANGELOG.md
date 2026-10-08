@@ -2,9 +2,11 @@
 
 ## Unreleased
 
+## 0.8.7 - 2026-10-08
+
 ### Added
 
-- Providers can be put in any order. Drag them in the Settings sidebar, or press Alt+Up / Alt+Down; the widget and the tray indicator follow.
+- Providers can be put in any order. Drag one by its grip in the Settings sidebar, or press Alt+Up / Alt+Down; the widget and the tray indicator follow.
 
 ### Changed
 
