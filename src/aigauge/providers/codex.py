@@ -43,7 +43,9 @@ EXTRACTOR_JS = r"""
   }
 
   function maybeSelectOverviewTab() {
-    if (/Weekly limit/i.test(limitsText) && /\d+(?:\.\d+)?\s*%/.test(limitsText)) {
+    // "N% left" is a current limit. A bare percent also appears in the
+    // Analytics history table ("Weekly limits ... 58.7%").
+    if (/Weekly limit/i.test(limitsText) && /\d+(?:\.\d+)?\s*%\s*left\b/i.test(limitsText)) {
       return null;
     }
 
@@ -52,7 +54,9 @@ EXTRACTOR_JS = r"""
     if (!label) return null;
 
     const target = label.closest('button,a,[role="tab"],[role="button"]') || label;
+    // The live tabs are plain buttons that carry only aria-pressed.
     const selected =
+      target.getAttribute('aria-pressed') === 'true' ||
       target.getAttribute('aria-selected') === 'true' ||
       target.getAttribute('data-state') === 'active' ||
       /\bactive\b|\bselected\b/.test(String(target.className || ''));
@@ -76,14 +80,10 @@ EXTRACTOR_JS = r"""
     };
   }
 
-  const bodyText = visibleText(document.body);
-  const limitsText = bodyText.split(/\bPlan limits\b/i).pop()
-    .split(/\bCredits\b|\bUsage limit resets\b|\bCredit usage history\b/i)[0];
-  const overviewReason = maybeSelectOverviewTab();
-  if (overviewReason) {
+  function retryPayload(reason) {
     return {
       __retry_after_ms: 1200,
-      __retry_reason: overviewReason,
+      __retry_reason: reason,
       logged_out: false,
       session: null,
       weekly: null,
@@ -92,6 +92,12 @@ EXTRACTOR_JS = r"""
       body_text: bodyText.slice(0, 2000),
     };
   }
+
+  const bodyText = visibleText(document.body);
+  const limitsText = bodyText.split(/\bPlan limits\b/i).pop()
+    .split(/\bCredits\b|\bUsage limit resets\b|\bCredit usage history\b/i)[0];
+  const overviewReason = maybeSelectOverviewTab();
+  if (overviewReason) return retryPayload(overviewReason);
 
   const lowerText = bodyText.toLowerCase();
   const isLoggedOut =
@@ -103,11 +109,14 @@ EXTRACTOR_JS = r"""
   return {
     logged_out: isLoggedOut,
     session: readCard('5-hour limit', ['Weekly limit']),
-    weekly: readCard('Weekly limit', []),
+    weekly: readCard('Weekly limit', ['5-hour limit']),
     url: location.href,
     title: document.title,
     has_percent_text: /%/.test(bodyText),
     has_usage_text: /Plan limits/i.test(bodyText),
+    // Computed from the full text: body_text below is cut to 2,000 characters.
+    has_plan_limits: /\bPlan limits\b/i.test(bodyText),
+    has_five_hour_heading: /5-hour limit/i.test(limitsText),
     body_text: bodyText.slice(0, 2000),
   };
 })();
@@ -265,13 +274,21 @@ def _looks_like_empty_signed_in_usage(payload: dict[str, Any]) -> bool:
     return any(marker in body_text for marker in ("codex", "chatgpt", "tasks", "cloud"))
 
 
-def _is_weekly_only_usage_layout(body_text: str) -> bool:
-    """Some plans have a weekly limit without a five-hour limit."""
-    text = re.sub(r"\s+", " ", body_text or "").lower()
+def _is_weekly_only_usage_layout(payload: dict[str, Any]) -> bool:
+    """Some plans have a weekly limit without a five-hour limit.
+
+    The extractor reports what it saw in the whole Plan limits section.
+    ``body_text`` is cut to 2,000 characters, so it only serves payloads that
+    carry no flags.
+    """
+    if "has_plan_limits" in payload and "has_five_hour_heading" in payload:
+        return bool(payload["has_plan_limits"]) and not bool(
+            payload["has_five_hour_heading"]
+        )
+    text = re.sub(r"\s+", " ", str(payload.get("body_text") or "")).lower()
     limits_text = _plan_limits_text(text)
     return (
         "plan limits" in text
-        and "shared across" in limits_text
         and "weekly limit" in limits_text
         and "5-hour limit" not in limits_text
     )
@@ -326,7 +343,7 @@ def _build_snapshot(
     body_text = str(payload.get("body_text") or "")
     for key, label, source_label, next_labels in (
         ("session", "Session", "5-hour limit", ("Weekly limit",)),
-        ("weekly", "Weekly", "Weekly limit", ()),
+        ("weekly", "Weekly", "Weekly limit", ("5-hour limit",)),
     ):
         card = payload.get(key) or _parse_body_card(
             body_text,
@@ -358,7 +375,7 @@ def _build_snapshot(
     labels = {metric.label.lower(): metric for metric in metrics}
     # A five-hour heading without data means the Overview is still loading.
     weekly_only_layout = (
-        set(labels) == {"weekly"} and _is_weekly_only_usage_layout(body_text)
+        set(labels) == {"weekly"} and _is_weekly_only_usage_layout(payload)
     )
     if metrics and set(labels) != {"session", "weekly"} and not weekly_only_layout:
         log_page_diagnosis(

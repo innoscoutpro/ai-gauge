@@ -125,6 +125,78 @@ def test_weekly_only_without_plan_context_is_retried():
     assert snapshot.status == SnapshotStatus.ERROR
 
 
+@pytest.mark.parametrize("reset", ["12h 15m", "3d"])
+def test_weekly_only_plan_does_not_need_the_shared_subtitle(reset):
+    snapshot = _build_snapshot(usage_payload(
+        f"Usage Overview Analytics Plan limits Weekly limit Resets in {reset} 75% left"
+    ))
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [(m.label, m.percent_used) for m in snapshot.metrics] == [("Weekly", 25.0)]
+    assert snapshot.metrics[0].resets_at is not None
+
+
+def weekly_card(percent=100):
+    return {
+        "percent": percent,
+        "kind": "remaining",
+        "reset_text": None,
+        "raw": f"Weekly limit {percent}% left",
+    }
+
+
+def test_weekly_only_card_is_kept_when_body_text_is_cut_before_the_limits():
+    snapshot = _build_snapshot(usage_payload(
+        "Usage Overview",
+        weekly=weekly_card(),
+        has_plan_limits=True,
+        has_five_hour_heading=False,
+    ))
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [(m.label, m.percent_used, m.reset_label) for m in snapshot.metrics] == [
+        ("Weekly", 0.0, "idle")
+    ]
+
+
+@pytest.mark.parametrize("flags", [
+    {"has_plan_limits": True, "has_five_hour_heading": True},
+    {"has_plan_limits": False, "has_five_hour_heading": False},
+])
+def test_extractor_flags_decide_weekly_only_over_body_text(flags):
+    # The body text alone would pass as a weekly-only layout.
+    snapshot = _build_snapshot(usage_payload(
+        SHARED_LIMITS + "Weekly limit Resets in 6d 10h 96% left",
+        weekly=weekly_card(96),
+        **flags,
+    ))
+
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert "part of the usage cards" in snapshot.error
+
+
+def test_body_fallback_weekly_heading_cannot_borrow_session_percent():
+    snapshot = _build_snapshot(usage_payload(
+        SHARED_LIMITS + "Weekly limit 5-hour limit Resets in 4h 0m 80% left"
+    ))
+
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert "part of the usage cards" in snapshot.error
+
+
+def test_analytics_history_is_not_a_current_weekly_limit():
+    snapshot = _build_snapshot(usage_payload(
+        "Usage Overview Analytics Usage history "
+        "Plan usage history By feature Weekly limits Period % of limit used "
+        "Sep 26 – Oct 3 Usage as of Oct 2, 12:00 AM UTC 58.7%",
+        url="https://chatgpt.com/settings/usage?tab=analytics#personal-usage",
+        has_percent_text=True,
+    ))
+
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert snapshot.metrics == []
+
+
 def test_credits_discount_and_purchased_resets_are_not_plan_limits():
     snapshot = _build_snapshot(usage_payload(
         SHARED_LIMITS + "5-hour limit Weekly limit Credits Up to 40% off "
