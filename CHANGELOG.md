@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Providers can be put in any order. Drag them in the Settings sidebar, or press Alt+Up / Alt+Down; the widget and the tray indicator follow.
+
+### Changed
+
+- Each provider is now turned on or off from its own Settings page. The checklist on the General page is gone, and a provider that is off shows dimmed in the sidebar.
+
 ## 0.8.6 - 2026-10-08
 
 ### Added
