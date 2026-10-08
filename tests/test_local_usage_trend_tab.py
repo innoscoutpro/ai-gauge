@@ -53,13 +53,21 @@ def _save(
     output=1_000_000,
     closed=True,
 ):
-    resets = datetime(2026, 9, 1, tzinfo=UTC) + timedelta(hours=5 * index)
+    if metric == "Weekly":
+        # Weekly rows follow local calendar-week boundaries, like a provider's
+        # seven-day reset, so date-based limit changes line up with the window.
+        reset_day = date(2026, 8, 31) + timedelta(days=7 * index)
+        resets = datetime.combine(reset_day, datetime.min.time()).astimezone()
+        window = timedelta(days=7)
+    else:
+        resets = datetime(2026, 9, 1, tzinfo=UTC) + timedelta(hours=5 * index)
+        window = timedelta(hours=5)
     save_summary(
         service.store,
         WindowSummary(
             account_id="claude",
             metric=metric,
-            window_start=resets - timedelta(hours=5),
+            window_start=resets - window,
             resets_at=resets,
             last_reading_at=resets - timedelta(minutes=5),
             last_pct=pct,
@@ -180,6 +188,14 @@ def test_partial_week_is_visible_but_not_compared(qtbot, service):
 
     tab.set_trend_metric("Weekly")
     tab.set_limit_changes([date(2026, 9, 1)])
+
+    current_week = tab.trend_report().rows[0].summary
+    assert current_week.window_start == datetime.combine(
+        date(2026, 9, 7), datetime.min.time()
+    ).astimezone(UTC)
+    assert current_week.resets_at == datetime.combine(
+        date(2026, 9, 14), datetime.min.time()
+    ).astimezone(UTC)
 
     assert tab.trend_headline_label.text() == (
         "Current week in progress    ·    45% used    ·    $10.00 API-equiv."

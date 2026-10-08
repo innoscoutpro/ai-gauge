@@ -36,7 +36,7 @@ from aigauge.ratio_dialog import RatioHistoryDialog
 
 FIXTURES = Path(__file__).parent / "fixtures" / "local_usage"
 UTC = timezone.utc
-NOW = datetime(2026, 9, 10, 18, 0, tzinfo=UTC)
+NOW = datetime(2026, 9, 10, 13, 0, tzinfo=UTC)
 
 
 def _local_naive(dt: datetime) -> datetime:
@@ -65,7 +65,7 @@ def _claude_snapshot(session_pct=20.0, weekly_pct=10.0, fable_pct=None) -> Usage
         provider="claude",
         status=SnapshotStatus.OK,
         metrics=metrics,
-        fetched_at=_local_naive(datetime(2026, 9, 10, 15, 55, tzinfo=UTC)),
+        fetched_at=_local_naive(NOW - timedelta(minutes=5)),
     )
 
 

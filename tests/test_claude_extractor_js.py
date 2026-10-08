@@ -81,6 +81,7 @@ def run_extractor(tmp_path, rows: list[tuple[str, int]]) -> dict:
         ["node", str(harness), str(nodes), str(script)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
     return json.loads(out.stdout)
@@ -107,7 +108,9 @@ def test_login_route_without_login_link_reports_signed_out(tmp_path):
     script.write_text(EXTRACTOR_JS, encoding="utf-8")
     nodes.write_text(json.dumps([("Welcome back Sign in with Google", 900)]), encoding="utf-8")
     result = json.loads(subprocess.check_output(
-        ["node", str(harness), str(nodes), str(script)], text=True
+        ["node", str(harness), str(nodes), str(script)],
+        text=True,
+        encoding="utf-8",
     ))
     assert result["logged_out"] is True
     assert "__retry_after_ms" not in result
@@ -125,7 +128,9 @@ def test_sign_in_page_on_new_route_reports_signed_out(tmp_path):
     script.write_text(EXTRACTOR_JS, encoding="utf-8")
     nodes.write_text(json.dumps([("Welcome back Sign in with Google", 900)]), encoding="utf-8")
     result = json.loads(subprocess.check_output(
-        ["node", str(harness), str(nodes), str(script)], text=True
+        ["node", str(harness), str(nodes), str(script)],
+        text=True,
+        encoding="utf-8",
     ))
     assert result["logged_out"] is True
     assert "__retry_after_ms" not in result

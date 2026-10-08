@@ -42,6 +42,7 @@ process.stdout.write(JSON.stringify(result));
         ["node", str(harness), str(payload), str(script)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
     return bool(json.loads(completed.stdout))
