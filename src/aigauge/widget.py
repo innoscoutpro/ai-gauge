@@ -367,6 +367,9 @@ def _short_error_reason(error: str | None) -> str:
     if not error:
         return "error"
     e = error.lower()
+    if "agy cli not found" in e:
+        # First, so a path quoted in the message cannot match a tag below.
+        return "error · agy not found"
     if "timeout" in e:
         return "error · timeout"
     if "failed to load" in e or "load failed" in e:

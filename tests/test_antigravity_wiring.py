@@ -1,14 +1,18 @@
-﻿from types import SimpleNamespace
+from types import SimpleNamespace
+
+import pytest
 
 from aigauge import app as app_module
 from aigauge import config as config_module
-from aigauge.app import App, _enabled_providers
+from aigauge.app import App, _enabled_providers, _preserve_error_metrics
 from aigauge.config import ColorThresholds, Config
 from aigauge.gauge import thresholds_for_provider
 from aigauge.mcp_server import _configured_account_ids
 from aigauge.menubar import PROVIDER_LABELS
+from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
+from aigauge.providers import antigravity
 from aigauge.settings_dialog import SettingsDialog
-from aigauge.widget import PROVIDER_ORDER
+from aigauge.widget import PROVIDER_ORDER, UsageWidget, _short_error_reason
 
 
 def test_antigravity_config_defaults_and_legacy_json(tmp_path, monkeypatch):
@@ -32,7 +36,7 @@ def test_antigravity_threshold_label_and_order():
     config.antigravity.colors = colors
     assert thresholds_for_provider(config, "antigravity") == colors
     assert PROVIDER_LABELS["antigravity"] == "Ag"
-    assert PROVIDER_ORDER[-1] == "antigravity"
+    assert PROVIDER_ORDER.index("antigravity") == PROVIDER_ORDER.index("openrouter") + 1
 
 
 def test_mcp_account_ids_follow_antigravity_toggle():
@@ -102,3 +106,85 @@ def test_settings_dialog_shows_and_saves_antigravity_options(qtbot, monkeypatch)
     assert dialog.tabs.currentIndex() == index
 
 
+def _good_snapshot() -> UsageSnapshot:
+    return UsageSnapshot(
+        provider="antigravity",
+        status=SnapshotStatus.OK,
+        metrics=[UsageMetric("Gemini weekly", 42.0, None)],
+    )
+
+
+def _refresh_once(monkeypatch, provider) -> UsageSnapshot:
+    monkeypatch.setattr(provider, "_run_async", lambda work, on_done: on_done(work()))
+    snapshots = []
+    provider.refresh(snapshots.append)
+    return snapshots[0]
+
+
+@pytest.mark.parametrize("file_name", [None, "notepad.exe"])
+def test_mis_set_cli_path_does_not_keep_showing_stale_numbers(
+    qtbot, monkeypatch, tmp_path, file_name
+):
+    # None: the configured file does not exist. Otherwise: it exists under
+    # another name.
+    path = tmp_path / (file_name or "agy.exe")
+    if file_name:
+        path.touch()
+    monkeypatch.setattr(
+        antigravity.subprocess, "Popen", lambda *a, **k: pytest.fail("must not run")
+    )
+    error = _refresh_once(
+        monkeypatch, antigravity.AntigravityProvider(cli_path=str(path))
+    )
+
+    merged = _preserve_error_metrics(error, _good_snapshot())
+
+    assert merged.status is SnapshotStatus.ERROR
+    assert merged.metrics == []
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    tile = widget.ensure_tile("antigravity", "Antigravity")
+    widget.update_snapshot(_good_snapshot(), "Antigravity")
+    widget.update_snapshot(merged, "Antigravity")
+    assert tile._rows == []  # noqa: SLF001
+    assert "stale" not in tile.status.text()
+    assert str(path) in tile.status.toolTip()
+
+
+def test_transient_antigravity_errors_still_keep_the_last_numbers(monkeypatch):
+    provider = antigravity.AntigravityProvider()
+    monkeypatch.setattr(antigravity, "resolve_cli", lambda _: None)
+    not_installed = _refresh_once(monkeypatch, provider)
+    assert not_installed.error == "agy CLI not found"
+
+    for error in (
+        not_installed,
+        UsageSnapshot(
+            provider="antigravity",
+            status=SnapshotStatus.ERROR,
+            error=antigravity._TIMEOUT_ERROR,
+        ),
+    ):
+        merged = _preserve_error_metrics(error, _good_snapshot())
+        assert [m.label for m in merged.metrics] == ["Gemini weekly"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "agy CLI not found",
+        # The quoted path must not be read as an "api" or "auth" failure.
+        "agy CLI not found at C:/tools/api/auth/agy.exe",
+    ],
+)
+def test_agy_not_found_has_a_tile_label(qtbot, error):
+    assert _short_error_reason(error) == "error \u00b7 agy not found"
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    tile = widget.ensure_tile("antigravity", "Antigravity")
+    widget.update_snapshot(
+        UsageSnapshot(provider="antigravity", status=SnapshotStatus.ERROR, error=error),
+        "Antigravity",
+    )
+    assert "error \u00b7 agy not found" in tile.status.text()
+    assert tile.status.toolTip().startswith(error)

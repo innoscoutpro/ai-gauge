@@ -704,8 +704,46 @@ def test_wrong_explicit_executable_is_rejected_without_running(monkeypatch, tmp_
 
     provider.refresh(snapshots.append)
 
-    assert snapshots[0].error.startswith("Not the agy CLI:")
+    assert snapshots[0].error == f"File is not named agy: {executable}"
     assert snapshots[0].raw["config_error"] is True
+
+
+@pytest.mark.parametrize("name", ["agy.exe", "AGY.EXE", "agy", "agy.cmd"])
+def test_path_check_is_a_name_guard_and_does_not_verify_the_program(
+    monkeypatch, tmp_path, name
+):
+    # On record: the check reads the file name only. A different program that
+    # happens to be called agy passes it and is run with the fixed arguments.
+    impostor = tmp_path / name
+    impostor.write_bytes(b"MZ this is some other program, not Antigravity")
+    provider = AntigravityProvider(cli_path=str(impostor))
+    _sync(provider, monkeypatch)
+    popen = _FakePopen([("usage: other-program [options]", "")])
+    monkeypatch.setattr(antigravity.subprocess, "Popen", popen)
+    snapshots = []
+
+    provider.refresh(snapshots.append)
+
+    assert [call.args for call in popen.spawned] == [[str(impostor), *AGY_ARGS[1:]]]
+    assert snapshots[0].status is SnapshotStatus.ERROR
+    assert snapshots[0].error == "unexpected agy output: stdout is not JSON"
+    assert "config_error" not in snapshots[0].raw
+    assert antigravity._PROCESS_LATCHED_ERROR is None
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("agy", True),
+        ("agy.exe", True),
+        ("Agy.Cmd", True),
+        ("agy2.exe", False),
+        ("notepad.exe", False),
+        ("agy.exe.bak", False),
+    ],
+)
+def test_is_agy_file_name(tmp_path, name, expected):
+    assert antigravity.is_agy_file_name(str(tmp_path / name)) is expected
 
 
 def test_missing_explicit_path_is_configuration_error(monkeypatch, tmp_path):

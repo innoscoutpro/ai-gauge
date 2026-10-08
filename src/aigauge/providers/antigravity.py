@@ -41,6 +41,15 @@ def normalize_cli_path(value: str | None) -> str | None:
     return normalized or None
 
 
+def is_agy_file_name(path: str) -> bool:
+    """True when the file is called agy (agy, agy.exe, AGY.CMD ...).
+
+    A typo guard for the configured path. It looks at the name only and says
+    nothing about what the program is.
+    """
+    return Path(path).stem.lower() == "agy"
+
+
 def resolve_cli(cli_path: str | None) -> str | None:
     cli_path = normalize_cli_path(cli_path)
     if cli_path:
@@ -353,11 +362,13 @@ class AntigravityProvider(Provider):
                     error=f"agy CLI not found at {configured_path}"[:200],
                     raw={"config_error": True},
                 )
-            if configured_path and Path(configured_path).stem.lower() != "agy":
+            # A guard against pointing the field at the wrong file, nothing
+            # more: any program that happens to be named agy passes it.
+            if configured_path and not is_agy_file_name(configured_path):
                 return UsageSnapshot(
                     provider=self.name,
                     status=SnapshotStatus.ERROR,
-                    error=f"Not the agy CLI: {configured_path}"[:200],
+                    error=f"File is not named agy: {configured_path}"[:200],
                     raw={"config_error": True},
                 )
             exe = resolve_cli(configured_path)
