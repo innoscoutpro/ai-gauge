@@ -6,13 +6,14 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from PyQt6.QtCore import QDir, QPoint, QPointF, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QDir, QEvent, QPoint, QPointF, QRect, QRectF, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QDesktopServices,
     QDragMoveEvent,
     QDropEvent,
     QKeyEvent,
+    QMouseEvent,
     QPainter,
     QPen,
     QPixmap,
@@ -41,6 +42,9 @@ from PyQt6.QtWidgets import (
     QSlider,
     QSpinBox,
     QStackedWidget,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QFrame,
     QScrollArea,
     QVBoxLayout,
@@ -675,6 +679,16 @@ _PROVIDER_LABELS = {
     key: label for key, label in _NAV_ENTRIES if key in _PROVIDER_PAGE_KEYS
 }
 _NAV_DIM_COLOR = "#6b7280"
+# Dot colours of the drag grip on a provider row, by row state.
+_NAV_GRIP_COLOR = "#6b7280"
+_NAV_GRIP_HOVER_COLOR = "#cbd5e1"
+_NAV_GRIP_SELECTED_COLOR = "#bfdbfe"
+# The grip is 2 columns by 3 rows of dots, centres 4 px apart.
+_NAV_GRIP_DOT_RADIUS = 1.1
+_NAV_GRIP_SPACING = 4
+_NAV_GRIP_SIZE = (7, 11)  # width, height of the dots' bounding box, rounded out
+_NAV_GRIP_RIGHT_INSET = 12  # grip's right edge, inside the row's right edge
+_NAV_GRIP_ZONE_WIDTH = 28  # rightmost part of a row that shows the hand cursor
 _NAV_REORDER_TIP = "Drag to reorder, or press Alt+Up / Alt+Down."
 
 
@@ -688,6 +702,46 @@ def _add_provider_enable_row(layout: QVBoxLayout, checkbox: QCheckBox, kind: str
             "order."
         )
     )
+
+
+def _nav_grip_rect(row_rect: QRect) -> QRect:
+    """Bounding rect of the drag grip on a provider row whose rect is `row_rect`."""
+    width, height = _NAV_GRIP_SIZE
+    return QRect(
+        row_rect.right() + 1 - _NAV_GRIP_RIGHT_INSET - width,
+        row_rect.top() + (row_rect.height() - height) // 2,
+        width,
+        height,
+    )
+
+
+class _NavDelegate(QStyledItemDelegate):
+    """Draws the stylesheet's row, then a drag grip on provider rows."""
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        super().paint(painter, option, index)
+        if index.data(Qt.ItemDataRole.UserRole) not in _PROVIDER_PAGE_KEYS:
+            return
+        if option.state & QStyle.StateFlag.State_Selected:
+            color = _NAV_GRIP_SELECTED_COLOR
+        elif option.state & QStyle.StateFlag.State_MouseOver:
+            color = _NAV_GRIP_HOVER_COLOR
+        else:
+            color = _NAV_GRIP_COLOR
+        center = QRectF(_nav_grip_rect(option.rect)).center()
+        half = _NAV_GRIP_SPACING / 2
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        for dx in (-half, half):
+            for dy in (-_NAV_GRIP_SPACING, 0, _NAV_GRIP_SPACING):
+                painter.drawEllipse(
+                    QPointF(center.x() + dx, center.y() + dy),
+                    _NAV_GRIP_DOT_RADIUS,
+                    _NAV_GRIP_DOT_RADIUS,
+                )
+        painter.restore()
 
 
 class _NavList(QListWidget):
@@ -704,6 +758,27 @@ class _NavList(QListWidget):
         self._move_provider = move_provider
         self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.setDropIndicatorShown(True)
+        self.setItemDelegate(_NavDelegate(self))
+        # Move events without a button held, for the grip's hand cursor.
+        self.setMouseTracking(True)
+
+    def _in_grip_zone(self, pos: QPoint) -> bool:
+        item = self.itemAt(pos)
+        if item is None or item.data(Qt.ItemDataRole.UserRole) not in _PROVIDER_PAGE_KEYS:
+            return False
+        return pos.x() > self.visualItemRect(item).right() - _NAV_GRIP_ZONE_WIDTH
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._in_grip_zone(event.position().toPoint()):
+            self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+        else:
+            self.viewport().unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def viewportEvent(self, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.Leave:
+            self.viewport().unsetCursor()
+        return super().viewportEvent(event)
 
     def _row_key(self, row: int):
         return self.item(row).data(Qt.ItemDataRole.UserRole)

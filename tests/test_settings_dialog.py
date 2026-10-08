@@ -1,6 +1,6 @@
-from PyQt6.QtCore import QMimeData, QPoint, QPointF, Qt
-from PyQt6.QtGui import QColor, QDragMoveEvent, QDropEvent
-from PyQt6.QtWidgets import QGroupBox, QLabel, QPushButton
+from PyQt6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, Qt
+from PyQt6.QtGui import QColor, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
+from PyQt6.QtWidgets import QApplication, QGroupBox, QLabel, QPushButton
 
 from aigauge import settings_dialog
 from aigauge.config import BrowserAccount, ColorThresholds, Config
@@ -942,3 +942,120 @@ def test_apply_to_writes_the_enable_flags_from_the_provider_pages(qtbot):
 
     assert config.providers.codex is False
     assert config.providers.openrouter is True
+
+
+# ----- sidebar drag grip -----
+
+
+def _grip_dialog(qtbot) -> SettingsDialog:
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    dialog.show()
+    return dialog
+
+
+def _viewport_move(dialog: SettingsDialog, pos: QPoint) -> None:
+    viewport = dialog.nav_list.viewport()
+    event = QMouseEvent(
+        QEvent.Type.MouseMove,
+        QPointF(pos),
+        QPointF(viewport.mapToGlobal(pos)),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    QApplication.sendEvent(viewport, event)
+
+
+def _count_color(image: QImage, rect: QRect, color: str) -> int:
+    target = QColor(color).rgb()
+    return sum(
+        1
+        for x in range(rect.left(), rect.right() + 1)
+        for y in range(rect.top(), rect.bottom() + 1)
+        if image.pixelColor(x, y).rgb() == target
+    )
+
+
+def test_sidebar_uses_the_grip_delegate(qtbot):
+    dialog = _grip_dialog(qtbot)
+
+    assert isinstance(dialog.nav_list.itemDelegate(), settings_dialog._NavDelegate)
+
+
+def test_grip_rect_sits_at_the_right_edge_of_the_row(qtbot):
+    dialog = _grip_dialog(qtbot)
+    row = dialog.nav_list.visualItemRect(_nav_row(dialog, "codex"))
+
+    grip = settings_dialog._nav_grip_rect(row)
+
+    assert row.contains(grip)
+    assert grip.right() + 1 == row.right() + 1 - 12
+    assert abs(grip.center().y() - row.center().y()) <= 1
+
+
+def test_provider_rows_paint_a_grip_and_other_rows_do_not(qtbot):
+    dialog = _grip_dialog(qtbot)
+    nav = dialog.nav_list
+    dialog.show_page("general")
+    image = nav.grab().toImage()
+    offset = nav.viewport().mapTo(nav, QPoint(0, 0))
+
+    def grip_rect(key: str) -> QRect:
+        row = nav.visualItemRect(_nav_row(dialog, key))
+        return settings_dialog._nav_grip_rect(row).translated(offset)
+
+    assert _count_color(image, grip_rect("codex"), settings_dialog._NAV_GRIP_COLOR) > 0
+    assert _count_color(image, grip_rect("general"), settings_dialog._NAV_GRIP_COLOR) == 0
+    assert _count_color(image, grip_rect("mcp"), settings_dialog._NAV_GRIP_COLOR) == 0
+
+    # The selected provider row draws its grip in the selected colour.
+    dialog.show_page("codex")
+    image = nav.grab().toImage()
+    selected = settings_dialog._NAV_GRIP_SELECTED_COLOR
+    assert _count_color(image, grip_rect("codex"), selected) > 0
+    assert _count_color(image, grip_rect("claude"), selected) == 0
+
+
+def test_cursor_is_an_open_hand_only_over_a_provider_grip_zone(qtbot):
+    dialog = _grip_dialog(qtbot)
+    nav = dialog.nav_list
+    viewport = nav.viewport()
+    codex = nav.visualItemRect(_nav_row(dialog, "codex"))
+    general = nav.visualItemRect(_nav_row(dialog, "general"))
+    caption = nav.visualItemRect(
+        next(nav.item(i) for i in range(nav.count()) if nav.item(i).text() == "PROVIDERS")
+    )
+
+    _viewport_move(dialog, QPoint(codex.right() - 10, codex.center().y()))
+    assert viewport.cursor().shape() == Qt.CursorShape.OpenHandCursor
+
+    _viewport_move(dialog, QPoint(codex.left() + 10, codex.center().y()))
+    assert viewport.cursor().shape() == Qt.CursorShape.ArrowCursor
+
+    _viewport_move(dialog, QPoint(codex.right() - 10, codex.center().y()))
+    _viewport_move(dialog, QPoint(general.right() - 10, general.center().y()))
+    assert viewport.cursor().shape() == Qt.CursorShape.ArrowCursor
+
+    _viewport_move(dialog, QPoint(codex.right() - 10, codex.center().y()))
+    _viewport_move(dialog, QPoint(caption.right() - 10, caption.center().y()))
+    assert viewport.cursor().shape() == Qt.CursorShape.ArrowCursor
+
+    _viewport_move(dialog, QPoint(codex.right() - 10, codex.center().y()))
+    QApplication.sendEvent(viewport, QEvent(QEvent.Type.Leave))
+    assert viewport.cursor().shape() == Qt.CursorShape.ArrowCursor
+
+
+def test_clicking_the_grip_still_shows_the_provider_page(qtbot):
+    dialog = _grip_dialog(qtbot)
+    nav = dialog.nav_list
+    dialog.show_page("general")
+    row = nav.visualItemRect(_nav_row(dialog, "copilot"))
+
+    qtbot.mouseClick(
+        nav.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(row.right() - 10, row.center().y()),
+    )
+
+    assert dialog.current_page_key() == "copilot"
