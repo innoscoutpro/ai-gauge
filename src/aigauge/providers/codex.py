@@ -20,6 +20,7 @@ from .idle import idle_reset_state
 
 CODEX_USAGE_URL = "https://chatgpt.com/settings/usage?tab=overview"
 _EXPECTED_ROWS = ("session", "weekly")
+_LABEL_FREE_NOTE = "Reset time unavailable: the page was read without its labels."
 log = logging.getLogger("aigauge.providers.codex")
 
 # Read only the Plan limits section: credits and purchased resets can contain
@@ -93,6 +94,29 @@ EXTRACTOR_JS = r"""
     };
   }
 
+  function numericAttribute(el, name) {
+    // Read the attribute, not the property: an indeterminate <progress> has
+    // no value attribute, yet its .value property reads 0.
+    const raw = el.getAttribute(name);
+    if (raw === null || String(raw).trim() === '') return null;
+    const number = Number(raw);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  // Each limit card holds a <progress max="100"> whose value is the percent
+  // remaining, whatever language the labels are in. Any such bar without a
+  // usable value means the cards are still loading, so nothing is read.
+  function remainingBarValues() {
+    const values = Array.from(document.querySelectorAll('progress'))
+      .filter(el => numericAttribute(el, 'max') === 100)
+      .map(el => numericAttribute(el, 'value'));
+    return values.every(value => value !== null && value >= 0 && value <= 100) ? values : [];
+  }
+
+  function barCard(value) {
+    return {raw: 'progress value=' + value, percent: value, kind: 'remaining', reset_text: null};
+  }
+
   const bodyText = visibleText(document.body);
   const limitsText = bodyText.split(/\bPlan limits\b/i).pop()
     .split(/\bCredits\b|\bUsage limit resets\b|\bCredit usage history\b/i)[0];
@@ -106,10 +130,32 @@ EXTRACTOR_JS = r"""
     location.pathname === '/login' ||
     document.title.toLowerCase().includes('login') ||
     (/log in|sign in/.test(lowerText) && !/Plan limits/i.test(bodyText));
-  return {
+  let session = readCard('5-hour limit', ['Weekly limit']);
+  let weekly = readCard('Weekly limit', ['5-hour limit']);
+
+  // Label-free fallback, only when no label was readable. Two bars are the
+  // 5-hour and weekly cards in DOM order. A single bar is a weekly-only plan
+  // or a half-rendered page, so it has to be seen on two consecutive runs.
+  let labelFree = false;
+  if (!session && !weekly && !isLoggedOut) {
+    const bars = remainingBarValues();
+    const asked = window.__aigaugeCodexSingleBarAsked === true;
+    window.__aigaugeCodexSingleBarAsked = bars.length === 1;
+    if (bars.length === 2) {
+      session = barCard(bars[0]);
+      weekly = barCard(bars[1]);
+      labelFree = true;
+    } else if (bars.length === 1) {
+      if (!asked) return retryPayload('confirming single usage bar');
+      weekly = barCard(bars[0]);
+      labelFree = true;
+    }
+  }
+
+  const payload = {
     logged_out: isLoggedOut,
-    session: readCard('5-hour limit', ['Weekly limit']),
-    weekly: readCard('Weekly limit', ['5-hour limit']),
+    session: session,
+    weekly: weekly,
     url: location.href,
     title: document.title,
     has_percent_text: /%/.test(bodyText),
@@ -119,6 +165,8 @@ EXTRACTOR_JS = r"""
     has_five_hour_heading: /5-hour limit/i.test(limitsText),
     body_text: bodyText.slice(0, 2000),
   };
+  if (labelFree) payload.label_free = true;
+  return payload;
 })();
 """
 
@@ -341,6 +389,9 @@ def _build_snapshot(
 
     metrics: list[UsageMetric] = []
     body_text = str(payload.get("body_text") or "")
+    # Set by the extractor when it read the cards' progress bars because no
+    # label was readable (a page in another language, or reworded labels).
+    label_free = bool(payload.get("label_free"))
     for key, label, source_label, next_labels in (
         ("session", "Session", "5-hour limit", ("Weekly limit",)),
         ("weekly", "Weekly", "Weekly limit", ("5-hour limit",)),
@@ -355,12 +406,17 @@ def _build_snapshot(
         percent = normalize_percent(card.get("percent"), card.get("kind", ""))
         resets_at = _parse_reset_text(card.get("reset_text"))
         reset_window = timedelta(hours=5) if key == "session" else timedelta(days=7)
-        resets_at, reset_label, idle_note = idle_reset_state(
-            percent=percent,
-            resets_at=resets_at,
-            window=reset_window,
-        )
-        note = idle_note or card.get("reset_text")
+        if label_free:
+            # No reset text was looked for, so its absence says nothing about
+            # an idle window: show the percent alone and say why.
+            resets_at, reset_label, note = None, None, _LABEL_FREE_NOTE
+        else:
+            resets_at, reset_label, idle_note = idle_reset_state(
+                percent=percent,
+                resets_at=resets_at,
+                window=reset_window,
+            )
+            note = idle_note or card.get("reset_text")
         metrics.append(
             UsageMetric(
                 label=label,
@@ -374,8 +430,9 @@ def _build_snapshot(
 
     labels = {metric.label.lower(): metric for metric in metrics}
     # A five-hour heading without data means the Overview is still loading.
-    weekly_only_layout = (
-        set(labels) == {"weekly"} and _is_weekly_only_usage_layout(payload)
+    # The label-free extractor confirms a lone bar itself before reporting it.
+    weekly_only_layout = set(labels) == {"weekly"} and (
+        label_free or _is_weekly_only_usage_layout(payload)
     )
     if metrics and set(labels) != {"session", "weekly"} and not weekly_only_layout:
         log_page_diagnosis(
@@ -424,6 +481,15 @@ def _build_snapshot(
             raw=payload,
         )
 
+    if label_free:
+        # Keep a real layout change visible in the log while the tile works.
+        log_page_diagnosis(
+            log,
+            provider=account_id,
+            classification="label_free_fallback",
+            payload=payload,
+            expected_rows=_EXPECTED_ROWS,
+        )
     return UsageSnapshot(
         provider=account_id,
         status=SnapshotStatus.OK,

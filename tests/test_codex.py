@@ -184,6 +184,64 @@ def test_body_fallback_weekly_heading_cannot_borrow_session_percent():
     assert "part of the usage cards" in snapshot.error
 
 
+def bar_card(percent):
+    return {
+        "raw": f"progress value={percent}",
+        "percent": percent,
+        "kind": "remaining",
+        "reset_text": None,
+    }
+
+
+def test_label_free_cards_show_percent_without_a_reset_time(caplog):
+    caplog.set_level("INFO", logger="aigauge.providers.codex")
+    snapshot = _build_snapshot(usage_payload(
+        "", session=bar_card(100), weekly=bar_card(94), label_free=True,
+    ))
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [(m.label, m.percent_used) for m in snapshot.metrics] == [
+        ("Session", 0.0), ("Weekly", 6.0)
+    ]
+    # An unread reset time is not evidence of an idle window, even at 0% used.
+    assert [(m.resets_at, m.reset_label) for m in snapshot.metrics] == [(None, None)] * 2
+    assert [m.note for m in snapshot.metrics] == [codex._LABEL_FREE_NOTE] * 2
+    assert [m.window for m in snapshot.metrics] == [timedelta(hours=5), timedelta(days=7)]
+    diagnoses = [r.getMessage() for r in caplog.records if "page diagnosis" in r.getMessage()]
+    assert len(diagnoses) == 1
+    assert "classification=label_free_fallback" in diagnoses[0]
+
+
+def test_label_free_lone_weekly_card_needs_no_plan_limits_text():
+    payload = usage_payload("", weekly=bar_card(42), label_free=True)
+    snapshot = _build_snapshot(payload)
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [(m.label, m.percent_used, m.note) for m in snapshot.metrics] == [
+        ("Weekly", 58.0, codex._LABEL_FREE_NOTE)
+    ]
+    # The same card without the marker is a partly rendered page.
+    del payload["label_free"]
+    assert _build_snapshot(payload).status == SnapshotStatus.ERROR
+
+
+def test_label_free_lone_session_card_is_still_partial():
+    snapshot = _build_snapshot(usage_payload(
+        "", session=bar_card(42), label_free=True,
+    ))
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert "part of the usage cards" in snapshot.error
+
+
+def test_labelled_page_logs_no_label_free_diagnosis(caplog):
+    caplog.set_level("INFO", logger="aigauge.providers.codex")
+    snapshot = _build_snapshot(usage_payload())
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert not [r for r in caplog.records if "label_free" in r.getMessage()]
+    assert all(m.note != codex._LABEL_FREE_NOTE for m in snapshot.metrics)
+
+
 def test_analytics_history_is_not_a_current_weekly_limit():
     snapshot = _build_snapshot(usage_payload(
         "Usage Overview Analytics Usage history "
