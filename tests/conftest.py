@@ -14,3 +14,13 @@ def isolated_appdata(tmp_path, monkeypatch):
     """Redirect %APPDATA% so config writes never touch the user's real folder."""
     monkeypatch.setenv("APPDATA", str(tmp_path))
     yield
+
+
+@pytest.fixture(autouse=True)
+def reset_antigravity_latch():
+    """The Antigravity token-spend latch is process-wide; clear it per test."""
+    from aigauge.providers import antigravity
+
+    antigravity._PROCESS_LATCHED_ERROR = None
+    yield
+    antigravity._PROCESS_LATCHED_ERROR = None

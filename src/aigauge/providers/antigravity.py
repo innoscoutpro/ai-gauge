@@ -20,14 +20,30 @@ _LATCH_ERROR = (
     "spending model quota. Update agy and restart AI Gauge."
 )
 _AGY_ENV_OVERRIDES = {"AGY_CLI_DISABLE_AUTO_UPDATE": "true"}
+_PROCESS_LATCHED_ERROR: str | None = None
 # agy's background updater can open an unhidden console on Windows; the value
 # must be "true" ("1" is ignored). This only affects AI Gauge quota calls,
 # leaving auto-updates enabled when users run agy themselves.
 
 
+def normalize_cli_path(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if (
+        len(normalized) >= 2
+        and normalized[0] == normalized[-1]
+        and normalized[0] in "\"'"
+    ):
+        normalized = normalized[1:-1].strip()
+    normalized = os.path.expandvars(os.path.expanduser(normalized)).strip()
+    return normalized or None
+
+
 def resolve_cli(cli_path: str | None) -> str | None:
-    if cli_path and Path(cli_path).is_file():
-        return cli_path
+    cli_path = normalize_cli_path(cli_path)
+    if cli_path:
+        return cli_path if Path(cli_path).is_file() else None
 
     found = shutil.which("agy")
     if found:
@@ -112,21 +128,27 @@ def _build_snapshot(
     usage = payload.get("usage")
     num_turns = payload.get("num_turns")
     total_tokens = usage.get("total_tokens") if isinstance(usage, dict) else None
-    if (
+    spent_tokens = (
+        isinstance(num_turns, (int, float)) and num_turns > 0
+    ) or (isinstance(total_tokens, (int, float)) and total_tokens > 0)
+    indeterminate_usage = (
         "command" not in payload
-        or (isinstance(num_turns, (int, float)) and num_turns > 0)
-        or (isinstance(total_tokens, (int, float)) and total_tokens > 0)
-    ):
+        and "num_turns" not in payload
+        and not (isinstance(usage, dict) and "total_tokens" in usage)
+    )
+    if spent_tokens or indeterminate_usage:
         raise RuntimeError(_LATCH_ERROR)
 
     if payload.get("status") != "SUCCESS":
-        raise ValueError("unexpected agy output: status is not SUCCESS")
+        raise ValueError(f"agy error: {payload.get('error', payload.get('status'))}")
     if num_turns != 0:
         raise ValueError("unexpected agy output: num_turns is not 0")
     if not isinstance(usage, dict):
         raise ValueError("unexpected agy output: usage is not an object")
     if total_tokens != 0:
         raise ValueError("unexpected agy output: usage.total_tokens is not 0")
+    if "command" not in payload:
+        raise ValueError("unexpected agy output: command is missing")
     if not isinstance(command, dict):
         raise ValueError("unexpected agy output: command is not an object")
     if command.get("name") != "usage":
@@ -224,6 +246,15 @@ class AntigravityProvider(Provider):
     name = "antigravity"
     display_name = "Antigravity"
 
+    @property
+    def _latched_error(self) -> str | None:
+        return _PROCESS_LATCHED_ERROR
+
+    @_latched_error.setter
+    def _latched_error(self, value: str | None) -> None:
+        global _PROCESS_LATCHED_ERROR
+        _PROCESS_LATCHED_ERROR = value
+
     def __init__(
         self,
         cli_path: str | None = None,
@@ -233,18 +264,33 @@ class AntigravityProvider(Provider):
         self._cli_path = cli_path
         self._show_gemini = show_gemini
         self._show_third_party = show_third_party
-        self._latched_error: str | None = None
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
         def work() -> UsageSnapshot:
-            if self._latched_error:
+            global _PROCESS_LATCHED_ERROR
+            if _PROCESS_LATCHED_ERROR:
                 return UsageSnapshot(
                     provider=self.name,
                     status=SnapshotStatus.ERROR,
-                    error=self._latched_error[:200],
+                    error=_PROCESS_LATCHED_ERROR[:200],
                 )
 
-            exe = resolve_cli(self._cli_path)
+            configured_path = normalize_cli_path(self._cli_path)
+            if configured_path and not Path(configured_path).is_file():
+                return UsageSnapshot(
+                    provider=self.name,
+                    status=SnapshotStatus.ERROR,
+                    error=f"agy CLI not found at {configured_path}"[:200],
+                    raw={"config_error": True},
+                )
+            if configured_path and Path(configured_path).stem.lower() != "agy":
+                return UsageSnapshot(
+                    provider=self.name,
+                    status=SnapshotStatus.ERROR,
+                    error=f"Not the agy CLI: {configured_path}"[:200],
+                    raw={"config_error": True},
+                )
+            exe = resolve_cli(configured_path)
             if exe is None:
                 return UsageSnapshot(
                     provider=self.name,
@@ -275,11 +321,11 @@ class AntigravityProvider(Provider):
                     show_third_party=self._show_third_party,
                 )
             except RuntimeError as exc:
-                self._latched_error = str(exc)[:200]
+                _PROCESS_LATCHED_ERROR = str(exc)[:200]
                 return UsageSnapshot(
                     provider=self.name,
                     status=SnapshotStatus.ERROR,
-                    error=self._latched_error,
+                    error=_PROCESS_LATCHED_ERROR,
                 )
             except (TypeError, ValueError) as exc:
                 return UsageSnapshot(
