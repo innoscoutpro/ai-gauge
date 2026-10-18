@@ -81,7 +81,7 @@ MIN_LABEL_WIDTH = 56
 PACE_TICK_OVERHANG = 2
 CHIP_NOTCH_HEIGHT = 4
 CHIP_NOTCH_HALF_WIDTH = 3.5
-PROVIDER_ORDER = ("claude", "codex", "opencode_go", "copilot", "openrouter")
+PROVIDER_ORDER = ("claude", "codex", "minimax", "opencode_go", "copilot", "openrouter")
 COLLAPSED_MIN_HEIGHT = WINDOW_COLLAPSED_MIN_HEIGHT
 EXPANDED_MIN_WIDTH = WINDOW_MIN_WIDTH
 COLLAPSED_MIN_WIDTH = WINDOW_COLLAPSED_MIN_WIDTH
@@ -113,6 +113,8 @@ def _provider_family(provider: str) -> str:
         return "claude"
     if provider == "codex" or provider.startswith("codex-"):
         return "codex"
+    if provider == "minimax" or provider.startswith("minimax-"):
+        return "minimax"
     if provider == "opencode_go" or provider.startswith("opencode_go-"):
         return "opencode_go"
     return provider
@@ -1267,7 +1269,7 @@ class _ProviderTile(QFrame):
             self.status.setToolTip(snapshot.error or "")
             self.status.setCursor(Qt.CursorShape.ArrowCursor)
             self.action_btn.setVisible(
-                _provider_family(self.provider) in ("claude", "codex", "opencode_go")
+                _provider_family(self.provider) in ("claude", "codex", "minimax", "opencode_go")
             )
             self.action_btn.setText("Add key" if is_opencode else "Sign in")
             self.expand_btn.setVisible(False)
@@ -1903,7 +1905,7 @@ class UsageWidget(QWidget):
         account_ids = [
             account.id
             for account in getattr(self._config, "browser_accounts", [])
-            if account.kind in ("claude", "codex", "opencode_go")
+            if account.kind in ("claude", "codex", "minimax", "opencode_go")
         ]
         if provider in account_ids:
             account = next(

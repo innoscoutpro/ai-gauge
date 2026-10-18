@@ -41,6 +41,7 @@ from .platforms import autostart_command, get_platform
 from .providers.base import Provider, ProviderSignals
 from .providers.claude import ClaudeProvider
 from .providers.codex import CodexProvider
+from .providers.minimax import MINIMAX_USAGE_URL, MiniMaxProvider
 from .providers.copilot import CopilotProvider
 from .providers.openrouter import OpenRouterProvider
 from .providers.opencode_go import OpenCodeGoProvider
@@ -72,6 +73,7 @@ log = logging.getLogger("aigauge.app")
 LOGIN_URLS = {
     "claude": ("https://claude.ai/login", "Sign in to Claude"),
     "codex": ("https://chatgpt.com/auth/login", "Sign in to ChatGPT"),
+    "minimax": (MINIMAX_USAGE_URL, "Sign in to MiniMax"),
 }
 
 _ACTIVE_MODE_MINUTES = 30
@@ -94,6 +96,8 @@ def _enabled_providers(config: Config) -> tuple[str, ...]:
             out.append("claude")
         if getattr(config.providers, "codex", False):
             out.append("codex")
+        if getattr(config.providers, "minimax", False):
+            out.append("minimax")
         if getattr(config.providers, "opencode_go", False):
             out.append("opencode_go")
     if config.providers.copilot:
@@ -446,6 +450,11 @@ class App(QObject):
                 )
             elif account.kind == "codex":
                 self._providers[account.id] = CodexProvider(
+                    parent=self,
+                    account_id=account.id,
+                )
+            elif account.kind == "minimax":
+                self._providers[account.id] = MiniMaxProvider(
                     parent=self,
                     account_id=account.id,
                 )
@@ -882,7 +891,7 @@ class App(QObject):
             browser_preference=getattr(self._config, "sign_in_browser", "ask"),
         )
         preference_changed = getattr(dlg, "browser_preference_changed", None)
-        if preference_changed is not None:
+        if preference_changed is not None and kind != "minimax":
             preference_changed.connect(self._remember_sign_in_browser)
         self._widget.suspend_always_on_top()
         try:
@@ -906,6 +915,8 @@ class App(QObject):
             return
         if kind == "opencode_go":
             return
+        if kind == "minimax":
+            return  # MiniMax uses an isolated browser profile, not pasted cookies.
         display_name = (
             account_display_name(draft)
             if draft is not None

@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QPushButton
+from PyQt6.QtWidgets import QPushButton, QTabWidget
 
 from aigauge import settings_dialog
 from aigauge.config import BrowserAccount, ColorThresholds, Config
@@ -31,6 +31,29 @@ def test_sign_in_button_emits_sign_in_signal(qtbot):
         _button(dialog, "claude_signin_btn").click()
 
     assert signal.args == ["claude"]
+
+
+def test_minimax_tab_uses_installed_browser_without_cookie_paste(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    assert "MiniMax" in [
+        tabs.tabText(i)
+        for tabs in dialog.findChildren(QTabWidget)
+        for i in range(tabs.count())
+    ]
+    assert dialog.minimax_cb.isChecked() is False
+    assert dialog.findChild(QPushButton, "minimax_paste_cookie_btn") is None
+    assert "installed browser" in _button(dialog, "minimax_signin_btn").toolTip()
+    with qtbot.waitSignal(dialog.sign_in_clicked) as signal:
+        _button(dialog, "minimax_signin_btn").click()
+    assert signal.args == ["minimax"]
+
+    dialog.minimax_cb.setChecked(True)
+    dialog.apply_to(config)
+    assert config.providers.minimax is True
 
 
 def test_paste_cookie_button_emits_paste_cookie_signal(qtbot):

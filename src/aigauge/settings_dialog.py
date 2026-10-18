@@ -62,6 +62,7 @@ from .local_usage.settings_panel import LocalUsagePanel
 from .logging_setup import log_path
 from .providers.claude import CLAUDE_USAGE_URL
 from .providers.codex import CODEX_USAGE_URL
+from .providers.minimax import MINIMAX_USAGE_URL
 from .startup import set_start_at_login
 from .webview.cookies import clear_browser_session  # lazy inside; no WebEngine at import
 
@@ -516,7 +517,7 @@ class _BrowserAccountRow(QWidget):
         self.name_edit.setText(account.name or "")
         self.name_edit.setPlaceholderText(
             "Default account"
-            if account.id in ("claude", "codex", "opencode_go")
+            if account.id in ("claude", "codex", "minimax", "opencode_go")
             else "Account name"
         )
         self.name_edit.setMinimumWidth(120)
@@ -548,14 +549,15 @@ class _BrowserAccountRow(QWidget):
             )
             account_actions.addWidget(sign_in)
 
-            paste = QPushButton("Paste cookie")
-            paste.setObjectName(f"{account.id}_paste_cookie_btn")
-            paste.setFixedWidth(92)
-            paste.setToolTip("Paste a session cookie for this account.")
-            paste.clicked.connect(
-                lambda: self.paste_cookie_clicked.emit(self.account_id)
-            )
-            account_actions.addWidget(paste)
+            if account.kind != "minimax":
+                paste = QPushButton("Paste cookie")
+                paste.setObjectName(f"{account.id}_paste_cookie_btn")
+                paste.setFixedWidth(92)
+                paste.setToolTip("Paste a session cookie for this account.")
+                paste.clicked.connect(
+                    lambda: self.paste_cookie_clicked.emit(self.account_id)
+                )
+                account_actions.addWidget(paste)
 
             clear = QPushButton("Clear sign-in")
             clear.setObjectName(f"{account.id}_clear_signin_btn")
@@ -777,7 +779,7 @@ class SettingsDialog(QDialog):
 
         providers_hint = _hint_label(
             "Show or hide provider groups in the widget. Manage multiple Claude, "
-            "Codex, or OpenCode accounts from their tabs."
+            "Codex, MiniMax, or OpenCode accounts from their tabs."
         )
         providers_layout.addWidget(providers_hint)
 
@@ -790,6 +792,11 @@ class SettingsDialog(QDialog):
         self.codex_cb.setToolTip("Show Codex accounts in the panel.")
         self.codex_cb.setChecked(config.providers.codex)
         providers_layout.addWidget(self.codex_cb)
+
+        self.minimax_cb = QCheckBox("MiniMax")
+        self.minimax_cb.setToolTip("Show MiniMax Coding Plan accounts in the panel.")
+        self.minimax_cb.setChecked(config.providers.minimax)
+        providers_layout.addWidget(self.minimax_cb)
 
         self.opencode_go_cb = QCheckBox("OpenCode")
         self.opencode_go_cb.setToolTip("Show OpenCode accounts in the panel.")
@@ -857,6 +864,30 @@ class SettingsDialog(QDialog):
         self._codex_accounts_layout = QVBoxLayout()
         self._codex_accounts_layout.setSpacing(6)
         codex_accounts_layout.addLayout(self._codex_accounts_layout)
+
+        # ----- MiniMax Coding Plan accounts -----
+        minimax_accounts = QGroupBox("MiniMax Accounts")
+        minimax_accounts_layout = QVBoxLayout(minimax_accounts)
+        minimax_accounts_layout.setSpacing(8)
+        minimax_accounts_layout.addWidget(
+            _hint_label(
+                "Track the 5-hour Coding Plan limit and show a weekly Unlimited "
+                "status. Sign in with your installed browser using a temporary "
+                "profile; AI Gauge imports only MiniMax cookies. "
+                "API credit balance is not part of this tile."
+            )
+        )
+        minimax_usage_btn = QPushButton("Open usage in browser")
+        minimax_usage_btn.setObjectName("minimax_open_usage_btn")
+        minimax_usage_btn.clicked.connect(
+            lambda _checked=False: _open_in_browser(MINIMAX_USAGE_URL)
+        )
+        minimax_accounts_layout.addWidget(
+            minimax_usage_btn, alignment=Qt.AlignmentFlag.AlignLeft
+        )
+        self._minimax_accounts_layout = QVBoxLayout()
+        self._minimax_accounts_layout.setSpacing(6)
+        minimax_accounts_layout.addLayout(self._minimax_accounts_layout)
 
         # ----- Copilot details -----
         copilot = QGroupBox("GitHub Copilot")
@@ -1064,6 +1095,13 @@ class SettingsDialog(QDialog):
         codex_tab_layout.addWidget(codex_accounts)
         codex_tab_layout.addStretch(1)
 
+        minimax_tab = QWidget()
+        minimax_tab_layout = QVBoxLayout(minimax_tab)
+        minimax_tab_layout.setContentsMargins(10, 10, 10, 10)
+        minimax_tab_layout.setSpacing(10)
+        minimax_tab_layout.addWidget(minimax_accounts)
+        minimax_tab_layout.addStretch(1)
+
         copilot_tab = QWidget()
         copilot_tab_layout = QVBoxLayout(copilot_tab)
         copilot_tab_layout.setContentsMargins(10, 10, 10, 10)
@@ -1148,6 +1186,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(general_tab, "General")
         tabs.addTab(claude_tab, "Claude")
         tabs.addTab(codex_tab, "Codex")
+        tabs.addTab(minimax_tab, "MiniMax")
         tabs.addTab(opencode_go_tab, "OpenCode")
         tabs.addTab(copilot_tab, "GitHub Copilot")
         tabs.addTab(openrouter_tab, "OpenRouter")
@@ -1227,9 +1266,10 @@ class SettingsDialog(QDialog):
         tab_index = {
             "claude": 1,
             "codex": 2,
-            "opencode_go": 3,
-            "copilot": 4,
-            "openrouter": 5,
+            "minimax": 3,
+            "opencode_go": 4,
+            "copilot": 5,
+            "openrouter": 6,
         }.get(kind)
         if tab_index is not None:
             self.tabs.setCurrentIndex(tab_index)
@@ -1302,6 +1342,7 @@ class SettingsDialog(QDialog):
         for layout in (
             self._claude_accounts_layout,
             self._codex_accounts_layout,
+            self._minimax_accounts_layout,
             self._opencode_go_accounts_layout,
         ):
             while layout.count():
@@ -1313,6 +1354,7 @@ class SettingsDialog(QDialog):
         for kind, layout in (
             ("claude", self._claude_accounts_layout),
             ("codex", self._codex_accounts_layout),
+            ("minimax", self._minimax_accounts_layout),
             ("opencode_go", self._opencode_go_accounts_layout),
         ):
             for account in [a for a in self._browser_accounts if a.kind == kind]:
@@ -1607,6 +1649,7 @@ class SettingsDialog(QDialog):
         config.browser_accounts = accounts
         config.providers.claude = self.claude_cb.isChecked()
         config.providers.codex = self.codex_cb.isChecked()
+        config.providers.minimax = self.minimax_cb.isChecked()
         config.providers.copilot = self.copilot_cb.isChecked()
         config.providers.openrouter = self.openrouter_cb.isChecked()
         config.providers.opencode_go = self.opencode_go_cb.isChecked()

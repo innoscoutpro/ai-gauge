@@ -244,6 +244,37 @@ def test_enabled_providers_includes_multiple_opencode_accounts_when_enabled():
     )
 
 
+def test_build_providers_creates_minimax_tile_when_enabled(monkeypatch):
+    config = Config(browser_accounts=[BrowserAccount(id="minimax", kind="minimax")])
+    config.providers.claude = False
+    config.providers.codex = False
+    config.providers.copilot = False
+    config.providers.minimax = True
+    created = []
+    ensured = []
+    monkeypatch.setattr(
+        app_module,
+        "MiniMaxProvider",
+        lambda parent=None, account_id="minimax": created.append(account_id) or object(),
+        raising=False,
+    )
+    app = App.__new__(App)
+    app._config = config  # noqa: SLF001
+    app._providers = {}  # noqa: SLF001
+    app._snapshots = {}  # noqa: SLF001
+    app._widget = SimpleNamespace(  # noqa: SLF001
+        _tiles={},
+        ensure_tile=lambda account_id, name: ensured.append((account_id, name)),
+        remove_tile=lambda account_id: None,
+    )
+
+    app._build_providers()  # noqa: SLF001
+
+    assert created == ["minimax"]
+    assert ensured == [("minimax", "MiniMax")]
+    assert list(app._providers) == ["minimax"]  # noqa: SLF001
+
+
 def test_build_providers_creates_one_provider_per_opencode_account(monkeypatch):
     config = Config(
         browser_accounts=[
@@ -383,6 +414,24 @@ def test_login_refreshes_immediately_when_embedded_session_changed(monkeypatch):
     assert timers[0][0] == 750
     timers[0][1]()
     assert refreshed == ["claude"]
+
+
+def test_minimax_sign_in_respects_selected_installed_browser(monkeypatch):
+    captured = []
+    class FakeLoginWindow:
+        session_may_have_changed = False
+        def __init__(self, *args, **kwargs): captured.append(kwargs)
+        def exec(self): return False
+    monkeypatch.setattr(app_module, "LoginWindow", FakeLoginWindow)
+    monkeypatch.setattr(app_module.webengine, "is_available", lambda: True)
+    app = App.__new__(App)
+    app._config = Config()
+    app._config.sign_in_browser = "brave"
+    app._settings_dialog = None
+    app._cleared_sessions = set()
+    app._widget = SimpleNamespace(suspend_always_on_top=lambda: None, restore_always_on_top=lambda: None)
+    app.open_login("minimax")
+    assert captured[0]["browser_preference"] == "brave"
 
 def test_widget_activation_raises_open_settings_dialog():
     app = App.__new__(App)

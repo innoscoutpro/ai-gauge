@@ -415,6 +415,40 @@ def test_codex_unparsed_usage_payload_still_reports_layout_error():
     assert "layout may have changed" in (snapshot.error or "")
 
 
+def test_codex_loading_shell_is_not_misreported_as_a_layout_change():
+    snapshot = _build_snapshot({
+        "body_text": "Skip to content Usage Loading usage settings…",
+        "has_percent_text": False,
+        "has_usage_text": False,
+        "logged_out": False,
+        "session": None,
+        "title": "Settings",
+        "url": "https://chatgpt.com/settings/usage?tab=overview",
+        "weekly": None,
+    })
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert "still loading" in (snapshot.error or "").lower()
+    assert "layout may have changed" not in (snapshot.error or "")
+
+
+def test_codex_reloads_overview_if_react_never_finishes_hydrating(monkeypatch):
+    from aigauge.providers import codex as codex_module
+
+    options = []
+
+    class Runner:
+        def __init__(self, **kwargs):
+            options.append(kwargs)
+
+        def run(self, callback):
+            pass
+
+    monkeypatch.setattr(codex_module, "ScrapeRunner", Runner)
+    codex_module.CodexProvider().refresh(lambda snapshot: None)
+
+    assert options[0]["transport_max_attempts"] == 2
+
+
 def test_codex_metrics_carry_windows():
     snapshot = _build_snapshot(
         {

@@ -45,4 +45,18 @@ VERIFY_TARGETS = {
           return false;
         })()""",
     ),
+    "minimax": (
+        "https://platform.minimax.io/console/usage",
+        r"""(() => {
+          const text = ((document.body && document.body.innerText) || '')
+            .replace(/\s+/g, ' ').trim();
+          return location.hostname === 'platform.minimax.io' &&
+            location.pathname === '/console/usage' &&
+            /\bMy usage\b/i.test(text) &&
+            /\b5h limit\b/i.test(text) &&
+            /\bTotal quota\b/i.test(text) &&
+            /\bUsed\s+\d+(?:\.\d+)?\s*%/i.test(text) &&
+            !/Sign in to MiniMax/i.test(text);
+        })()""",
+    ),
 }

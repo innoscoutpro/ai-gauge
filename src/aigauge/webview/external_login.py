@@ -18,6 +18,7 @@ import websocket
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from ..config import COOKIE_DOMAINS, COOKIE_NAME_ALIASES, app_data_dir
+from .targets import VERIFY_TARGETS
 
 log = logging.getLogger("aigauge.webview.external_login")
 
@@ -249,6 +250,7 @@ class ExternalLoginWorker(QThread):
         return {
             "claude": "Claude",
             "codex": "ChatGPT",
+            "minimax": "MiniMax",
         }.get(self._provider, self._provider)
 
     def _poll_for_session(self) -> None:
@@ -300,7 +302,54 @@ class ExternalLoginWorker(QThread):
             self._stop_event.wait(0.75)
 
     def _session_is_ready(self, cookies: list[dict]) -> bool:
+        if self._provider == "minimax":
+            # Its auth cookie name is undocumented: require proof that the
+            # temporary browser actually renders the signed-in usage page.
+            return bool(cookies) and self._minimax_usage_visible()
         return _has_auth_cookie(self._provider, cookies)
+
+    def _minimax_usage_visible(self) -> bool:
+        """Check the temporary browser's authenticated page, not cookie names."""
+        if self._debug_port is None:
+            return False
+        try:
+            session = requests.Session()
+            session.trust_env = False
+            response = session.get(
+                f"http://127.0.0.1:{self._debug_port}/json", timeout=1.5
+            )
+            response.raise_for_status()
+            pages = response.json()
+            if not isinstance(pages, list):
+                return False
+            target_url, predicate = VERIFY_TARGETS["minimax"]
+            for page in pages:
+                if not isinstance(page, dict) or page.get("type") != "page":
+                    continue
+                candidate = urlparse(str(page.get("url", "")))
+                expected = urlparse(target_url)
+                if (candidate.scheme, candidate.hostname, candidate.path) != (
+                    expected.scheme, expected.hostname, expected.path
+                ):
+                    continue
+                ws_url = page.get("webSocketDebuggerUrl")
+                if not _is_loopback_websocket_url(ws_url, self._debug_port):
+                    continue
+                connection = _create_websocket_connection(str(ws_url), timeout=1.5)
+                try:
+                    connection.send(json.dumps({
+                        "id": 1, "method": "Runtime.evaluate",
+                        "params": {"expression": predicate, "returnByValue": True},
+                    }))
+                    for _ in range(20):
+                        result = json.loads(connection.recv())
+                        if result.get("id") == 1:
+                            return result.get("result", {}).get("result", {}).get("value") is True
+                finally:
+                    connection.close()
+        except (requests.RequestException, ValueError, OSError, websocket.WebSocketException):
+            return False
+        return False
 
     def _discover_websocket(self) -> bool:
         assert self._debug_port is not None

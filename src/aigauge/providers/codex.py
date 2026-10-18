@@ -123,6 +123,17 @@ EXTRACTOR_JS = r"""
   }
 
   const bodyText = visibleText(document.body);
+  const pageUrl = new URL(location.href);
+  if (pageUrl.origin === 'https://chatgpt.com' &&
+      pageUrl.pathname === '/settings/usage' &&
+      pageUrl.searchParams.get('tab') === 'overview' &&
+      /\bLoading usage settings(?:…|\.\.\.)?/i.test(bodyText) &&
+      !/\bPlan limits\b/i.test(bodyText)) {
+    return {
+      __retry_after_ms: 1200,
+      __retry_reason: 'usage settings still loading',
+    };
+  }
   const personalTabReason = maybeSelectPersonalUsageTab(bodyText);
   if (personalTabReason) {
     return {
@@ -461,6 +472,16 @@ def _build_snapshot(
         )
 
     if not metrics or all(m.percent_used is None for m in metrics):
+        if (
+            _is_codex_overview_url(str(payload.get("url") or ""))
+            and re.search(r"\bLoading usage settings", body_text, re.IGNORECASE)
+        ):
+            return UsageSnapshot(
+                provider=account_id,
+                status=SnapshotStatus.ERROR,
+                error="ChatGPT usage settings are still loading; retrying.",
+                raw=payload,
+            )
         if _looks_like_empty_signed_in_usage(payload):
             log_page_diagnosis(
                 log,
@@ -519,7 +540,7 @@ class CodexProvider(Provider):
             build=_build,
             log=log,
             wait_ms=7000,
-            transport_max_attempts=1,
+            transport_max_attempts=2,
             build_max_attempts=2,
             parent=self._parent,
         )

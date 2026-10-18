@@ -668,6 +668,35 @@ def test_secondary_browser_account_auth_tile_uses_sign_in_button(qtbot):
 
 
 
+def test_minimax_tile_shows_sign_in_and_unlimited_without_a_weekly_gauge(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="minimax", status=SnapshotStatus.AUTH_REQUIRED,
+            error="Not signed in to MiniMax.",
+        ),
+        "MiniMax",
+    )
+    tile = widget._tiles["minimax"]  # noqa: SLF001
+    assert tile.action_btn.text() == "Sign in"
+    assert not tile.action_btn.isHidden()
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="minimax", status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric("5h", 11.0, datetime.now() + timedelta(hours=3)),
+                UsageMetric("Weekly", None, reset_label="Unlimited"),
+            ],
+        ),
+        "MiniMax",
+    )
+    weekly = tile._rows[1]  # noqa: SLF001
+    assert weekly.reset.text() == "Unlimited"
+    assert weekly.bar.isHidden()
+
+
 def test_opencode_go_auth_tile_uses_add_key_button(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)

@@ -32,11 +32,13 @@ def test_defaults():
     assert [a.id for a in c.browser_accounts] == [
         "claude",
         "codex",
+        "minimax",
         "opencode_go",
     ]
     assert [a.kind for a in c.browser_accounts] == [
         "claude",
         "codex",
+        "minimax",
         "opencode_go",
     ]
     assert c.providers.copilot is True
@@ -376,6 +378,29 @@ def test_secondary_opencode_account_resolves_kind_and_display_name():
 
     assert account_kind(c, "opencode_go-work") == "opencode_go"
     assert display_name_for_account(c, "opencode_go-work") == "OpenCode (Work)"
+
+
+def test_minimax_account_is_available_without_enabling_it_for_everyone():
+    c = Config()
+    assert c.providers.minimax is False
+    assert [a.id for a in browser_accounts(c, kind="minimax")] == ["minimax"]
+    assert account_kind(c, "minimax") == "minimax"
+    assert display_name_for_account(c, "minimax") == "MiniMax"
+
+
+def test_v2_config_can_add_minimax_without_restoring_removed_accounts():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts": [], "browser_accounts_version": 2}',
+        encoding="utf-8",
+    )
+    c = Config.load()
+    assert c.browser_accounts == []
+    c.browser_accounts.append(BrowserAccount(id="minimax", kind="minimax"))
+    c.save()
+    loaded = Config.load()
+    assert [(a.id, a.kind) for a in loaded.browser_accounts] == [("minimax", "minimax")]
+    assert loaded.browser_accounts_version == 2
 
 
 def test_load_migrates_start_with_windows_to_start_at_login():

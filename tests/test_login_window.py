@@ -51,6 +51,24 @@ def test_google_hosts_are_detected_and_allowlisted():
     assert _host_allowed("accounts.youtube.com")
 
 
+def test_minimax_embedded_sign_in_allows_its_own_host_only(tmp_path):
+    assert _host_allowed("platform.minimax.io")
+    assert not _host_allowed("notminimax.io")
+    state = {
+        "body": "Plan Usage My usage 5h limit Resets in 3 hr 9 min Total quota 100% Used 11%",
+        "title": "Usage - MiniMax",
+        "location": {
+            "hostname": "platform.minimax.io",
+            "pathname": "/console/usage",
+            "hash": "",
+        },
+    }
+    assert VERIFY_TARGETS["minimax"][0] == "https://platform.minimax.io/console/usage"
+    assert _run_target_js(tmp_path, "minimax", state)
+    state["body"] = "Sign in to MiniMax"
+    assert not _run_target_js(tmp_path, "minimax", state)
+
+
 def test_logged_blocked_url_drops_query_and_fragment():
     url = QUrl(
         "https://accounts.google.com/o/oauth2/v2/auth?"
