@@ -32,15 +32,18 @@ def test_defaults():
     assert [a.id for a in c.browser_accounts] == [
         "claude",
         "codex",
+        "minimax",
         "opencode_go",
     ]
     assert [a.kind for a in c.browser_accounts] == [
         "claude",
         "codex",
+        "minimax",
         "opencode_go",
     ]
     assert c.providers.copilot is True
     assert c.providers.opencode_go is False
+    assert c.providers.minimax is False
     assert c.start_at_login is False
     assert c.sign_in_browser == "ask"
     assert c.copilot.monthly_quota == 1500
@@ -378,6 +381,15 @@ def test_secondary_opencode_account_resolves_kind_and_display_name():
     assert display_name_for_account(c, "opencode_go-work") == "OpenCode (Work)"
 
 
+def test_minimax_account_is_available_without_enabling_it_for_everyone():
+    c = Config()
+
+    assert c.providers.minimax is False
+    assert [account.id for account in browser_accounts(c, kind="minimax")] == ["minimax"]
+    assert account_kind(c, "minimax") == "minimax"
+    assert display_name_for_account(c, "minimax") == "MiniMax"
+
+
 def test_load_migrates_start_with_windows_to_start_at_login():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
@@ -415,6 +427,7 @@ def test_provider_order_puts_saved_kinds_first_then_the_rest():
         "openrouter",
         "claude",
         "codex",
+        "minimax",
         "opencode_go",
         "copilot",
         "antigravity",

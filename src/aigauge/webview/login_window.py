@@ -92,6 +92,8 @@ AUTH_HOST_ALLOWLIST: tuple[str, ...] = (
     "openai.com",
     "oaistatic.com",
     "oaiusercontent.com",
+    # MiniMax Coding Plan
+    "minimax.io",
     # Identity providers used by the above for SSO popups.
     "auth0.com",
     "google.com",
@@ -570,6 +572,7 @@ class LoginWindow(QDialog):
         return {
             "claude": "Claude",
             "codex": "ChatGPT",
+            "minimax": "MiniMax",
         }.get(self._provider, self._provider)
 
     def _on_external_status(self, message: str) -> None:

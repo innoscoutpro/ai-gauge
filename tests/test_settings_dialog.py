@@ -81,6 +81,25 @@ def test_codex_open_usage_button_launches_browser(qtbot, monkeypatch):
     assert opened == [settings_dialog.CODEX_USAGE_URL]
 
 
+def test_minimax_page_uses_installed_browser_without_cookie_paste(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    assert "minimax" in dialog.page_keys()
+    assert dialog.minimax_cb.isChecked() is False
+    assert dialog.findChild(QPushButton, "minimax_paste_cookie_btn") is None
+    assert "installed browser" in _button(dialog, "minimax_signin_btn").toolTip()
+    with qtbot.waitSignal(dialog.sign_in_clicked) as signal:
+        _button(dialog, "minimax_signin_btn").click()
+    assert signal.args == ["minimax"]
+
+    dialog.minimax_cb.setChecked(True)
+    dialog.apply_to(config)
+    assert config.providers.minimax is True
+
+
 def test_mcp_integration_defaults_off_and_gates_policies(qtbot, monkeypatch):
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
     config = Config()
@@ -505,7 +524,7 @@ def test_mcp_policy_for_removed_account_is_not_saved(qtbot, monkeypatch):
 
 
 _PAGE_KEYS = [
-    "general", "claude", "codex", "opencode_go", "copilot",
+    "general", "claude", "codex", "minimax", "opencode_go", "copilot",
     "openrouter", "antigravity", "mcp", "local_usage",
 ]
 
@@ -519,8 +538,8 @@ def test_settings_pages_are_listed_in_order_and_general_is_selected(qtbot):
     assert [
         dialog.nav_list.item(i).text() for i in range(dialog.nav_list.count())
     ] == [
-        "General", "PROVIDERS", "Claude", "Codex", "OpenCode", "GitHub Copilot",
-        "OpenRouter", "Antigravity", "TOOLS", "MCP", "Local usage",
+        "General", "PROVIDERS", "Claude", "Codex", "MiniMax", "OpenCode",
+        "GitHub Copilot", "OpenRouter", "Antigravity", "TOOLS", "MCP", "Local usage",
     ]
 
 
@@ -589,7 +608,7 @@ def test_show_provider_lands_on_each_provider_page(qtbot):
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
 
-    for kind in ("claude", "codex", "opencode_go", "copilot", "openrouter", "antigravity"):
+    for kind in ("claude", "codex", "minimax", "opencode_go", "copilot", "openrouter", "antigravity"):
         dialog.show_page("general")
         dialog.show_provider(kind)
         assert dialog.current_page_key() == kind
@@ -598,7 +617,7 @@ def test_show_provider_lands_on_each_provider_page(qtbot):
 
 # ----- provider enable checkboxes, sidebar state and order -----
 
-_PROVIDER_KINDS = ["claude", "codex", "opencode_go", "copilot", "openrouter", "antigravity"]
+_PROVIDER_KINDS = ["claude", "codex", "minimax", "opencode_go", "copilot", "openrouter", "antigravity"]
 
 
 def _nav_keys(dialog: SettingsDialog) -> list:
@@ -715,10 +734,10 @@ def test_sidebar_follows_saved_provider_order(qtbot):
     qtbot.addWidget(dialog)
 
     assert dialog.provider_order() == [
-        "openrouter", "claude", "codex", "opencode_go", "copilot", "antigravity",
+        "openrouter", "claude", "codex", "minimax", "opencode_go", "copilot", "antigravity",
     ]
     assert _nav_keys(dialog) == [
-        "general", None, "openrouter", "claude", "codex", "opencode_go",
+        "general", None, "openrouter", "claude", "codex", "minimax", "opencode_go",
         "copilot", "antigravity", None, "mcp", "local_usage",
     ]
     assert sorted(dialog.page_keys()) == sorted(_PAGE_KEYS)
@@ -746,7 +765,7 @@ def test_move_provider_reorders_clamps_and_keeps_other_rows(qtbot):
 
     dialog.move_provider("antigravity", 0)
     assert dialog.provider_order() == [
-        "antigravity", "claude", "codex", "opencode_go", "copilot", "openrouter",
+        "antigravity", "claude", "codex", "minimax", "opencode_go", "copilot", "openrouter",
     ]
     dialog.move_provider("antigravity", 99)
     assert dialog.provider_order() == _PROVIDER_KINDS
@@ -754,14 +773,14 @@ def test_move_provider_reorders_clamps_and_keeps_other_rows(qtbot):
     assert dialog.provider_order() == _PROVIDER_KINDS
     dialog.move_provider("claude", 3)
     assert dialog.provider_order() == [
-        "codex", "opencode_go", "copilot", "claude", "openrouter", "antigravity",
+        "codex", "minimax", "opencode_go", "claude", "copilot", "openrouter", "antigravity",
     ]
     # Non-provider rows never move, and asking to move one does nothing.
     dialog.move_provider("mcp", 0)
     dialog.move_provider("general", 3)
     keys = _nav_keys(dialog)
     assert keys[0] == "general" and keys[1] is None
-    assert keys[8] is None and keys[9:] == ["mcp", "local_usage"]
+    assert keys[9] is None and keys[10:] == ["mcp", "local_usage"]
     # The page that was shown stays shown and its row stays selected.
     assert dialog.current_page_key() == "codex"
     assert dialog.pages.currentWidget() is dialog.page_widget("codex")
@@ -775,8 +794,8 @@ def test_show_page_lands_on_the_right_page_after_a_move(qtbot):
     dialog.move_provider("openrouter", 0)
     dialog.move_provider("claude", 5)
     assert dialog.page_keys() == [
-        "general", "openrouter", "codex", "opencode_go", "copilot",
-        "antigravity", "claude", "mcp", "local_usage",
+        "general", "openrouter", "codex", "minimax", "opencode_go", "copilot",
+        "claude", "antigravity", "mcp", "local_usage",
     ]
     for key in dialog.page_keys():
         dialog.show_page(key)
@@ -809,23 +828,23 @@ def test_drop_inside_provider_section_reorders_without_losing_rows(qtbot):
 
     assert event.dropAction() == Qt.DropAction.IgnoreAction
     assert dialog.provider_order() == [
-        "codex", "opencode_go", "copilot", "claude", "openrouter", "antigravity",
+        "codex", "minimax", "opencode_go", "copilot", "claude", "openrouter", "antigravity",
     ]
     keys = _nav_keys(dialog)
     assert sorted(k for k in keys if k in _PROVIDER_KINDS) == sorted(_PROVIDER_KINDS)
-    assert dialog.nav_list.count() == 11
+    assert dialog.nav_list.count() == 12
     assert dialog.current_page_key() == "claude"
 
     # Upper half of Codex: Antigravity lands right before it.
     _drop(dialog, "antigravity", "codex", below=False)
     assert dialog.provider_order() == [
-        "antigravity", "codex", "opencode_go", "copilot", "claude", "openrouter",
+        "antigravity", "codex", "minimax", "opencode_go", "copilot", "claude", "openrouter",
     ]
     # Dropping a row on its own edges changes nothing.
     _drop(dialog, "codex", "codex", below=True)
     _drop(dialog, "codex", "codex", below=False)
     assert dialog.provider_order() == [
-        "antigravity", "codex", "opencode_go", "copilot", "claude", "openrouter",
+        "antigravity", "codex", "minimax", "opencode_go", "copilot", "claude", "openrouter",
     ]
 
 
@@ -837,14 +856,14 @@ def test_drop_outside_provider_section_changes_nothing(qtbot):
 
     rects = [
         dialog.nav_list.visualItemRect(dialog.nav_list.item(row))
-        for row in (0, 1, 8, 9, 10)  # General, PROVIDERS, TOOLS, MCP, Local usage
+        for row in (0, 1, 9, 10, 11)  # General, PROVIDERS, TOOLS, MCP, Local usage
     ]
     for rect in rects:
         dialog.show_page("claude")
         event = _drop_at(dialog, QPointF(rect.center()))
         assert event.dropAction() == Qt.DropAction.IgnoreAction
         assert _nav_keys(dialog) == before
-        assert dialog.nav_list.count() == 11
+        assert dialog.nav_list.count() == 12
     assert dialog.nav_list.drop_position(QPoint(5, 5000)) is None
 
 
@@ -878,13 +897,13 @@ def test_alt_arrows_move_the_current_provider_row(qtbot):
     dialog.nav_list.setFocus()
 
     qtbot.keyClick(dialog.nav_list, Qt.Key.Key_Down, Qt.KeyboardModifier.AltModifier)
-    assert dialog.provider_order()[:3] == ["claude", "opencode_go", "codex"]
+    assert dialog.provider_order()[:3] == ["claude", "minimax", "codex"]
     assert dialog.current_page_key() == "codex"
 
     for _ in range(3):  # the third press is at the top and does nothing
         qtbot.keyClick(dialog.nav_list, Qt.Key.Key_Up, Qt.KeyboardModifier.AltModifier)
     assert dialog.provider_order() == [
-        "codex", "claude", "opencode_go", "copilot", "openrouter", "antigravity",
+        "codex", "claude", "minimax", "opencode_go", "copilot", "openrouter", "antigravity",
     ]
     assert dialog.current_page_key() == "codex"
 
@@ -923,10 +942,10 @@ def test_apply_to_writes_the_provider_order(qtbot):
     dialog.move_provider("antigravity", 0)
     dialog.apply_to(config)
     assert config.provider_order == [
-        "antigravity", "claude", "codex", "opencode_go", "copilot", "openrouter",
+        "antigravity", "claude", "codex", "minimax", "opencode_go", "copilot", "openrouter",
     ]
 
-    dialog.move_provider("antigravity", 5)
+    dialog.move_provider("antigravity", 6)
     dialog.apply_to(config)
     assert config.provider_order == []
 

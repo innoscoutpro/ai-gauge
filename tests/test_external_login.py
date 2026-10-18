@@ -47,6 +47,77 @@ def test_auth_cookie_detection_handles_codex_split_tokens():
     )
 
 
+def test_minimax_session_requires_authenticated_usage_page_not_merely_cookies(monkeypatch):
+    worker = ExternalLoginWorker(
+        "minimax", "https://platform.minimax.io/console/usage", "minimax"
+    )
+    cookies = [
+        {"name": "auth", "value": "secret", "domain": ".minimax.io"},
+        {"name": "ga", "value": "private", "domain": ".google.com"},
+    ]
+
+    assert [item["name"] for item in _provider_cookies("minimax", cookies)] == ["auth"]
+    monkeypatch.setattr(worker, "_minimax_usage_visible", lambda: False)
+    assert not worker._session_is_ready(cookies)
+    monkeypatch.setattr(worker, "_minimax_usage_visible", lambda: True)
+    assert worker._session_is_ready(cookies)
+    assert not worker._session_is_ready([])
+
+
+def test_minimax_cdp_verification_requires_exact_https_origin_including_port(monkeypatch):
+    worker = ExternalLoginWorker(
+        "minimax", "https://platform.minimax.io/console/usage", "minimax"
+    )
+    worker._debug_port = 43123  # noqa: SLF001 - CDP test seam
+    entries = [
+        {
+            "type": "page",
+            "url": "https://platform.minimax.io:443/console/usage",
+            "webSocketDebuggerUrl": "ws://127.0.0.1:43123/devtools/page/wrong-port",
+        },
+        {
+            "type": "page",
+            "url": "https://platform.minimax.io/console/usage",
+            "webSocketDebuggerUrl": "ws://127.0.0.1:43123/devtools/page/good",
+        },
+    ]
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return entries
+
+    class Session:
+        trust_env = True
+
+        def get(self, url, timeout):
+            assert url == "http://127.0.0.1:43123/json"
+            return Response()
+
+    class Socket:
+        def send(self, message):
+            assert "My usage" in json.loads(message)["params"]["expression"]
+
+        def recv(self):
+            return json.dumps({"id": 1, "result": {"result": {"value": True}}})
+
+        def close(self):
+            return None
+
+    visited = []
+    monkeypatch.setattr(external_login.requests, "Session", Session)
+    monkeypatch.setattr(
+        external_login,
+        "_create_websocket_connection",
+        lambda url, **kwargs: visited.append(url) or Socket(),
+    )
+
+    assert worker._minimax_usage_visible()
+    assert visited == ["ws://127.0.0.1:43123/devtools/page/good"]
+
+
 def test_supported_browser_selection_is_explicit(monkeypatch, tmp_path):
     chrome = tmp_path / "chrome.exe"
     edge = tmp_path / "msedge.exe"

@@ -57,6 +57,7 @@ COOKIE_NAME_ALIASES = {
 COOKIE_DOMAINS = {
     "claude": ".claude.ai",
     "codex": ".chatgpt.com",
+    "minimax": ".minimax.io",
 }
 
 
@@ -113,6 +114,7 @@ class WindowState(BaseModel):
 DEFAULT_PROVIDER_ORDER: tuple[str, ...] = (
     "claude",
     "codex",
+    "minimax",
     "opencode_go",
     "copilot",
     "openrouter",
@@ -123,6 +125,7 @@ DEFAULT_PROVIDER_ORDER: tuple[str, ...] = (
 class ProviderToggles(BaseModel):
     claude: bool = True
     codex: bool = True
+    minimax: bool = False
     copilot: bool = True
     openrouter: bool = False
     antigravity: bool = False
@@ -226,6 +229,7 @@ class Config(BaseModel):
         default_factory=lambda: [
             BrowserAccount(id="claude", kind="claude"),
             BrowserAccount(id="codex", kind="codex"),
+            BrowserAccount(id="minimax", kind="minimax"),
             BrowserAccount(
                 id="opencode_go",
                 kind="opencode_go",
@@ -387,6 +391,7 @@ def provider_base_name(kind: str) -> str:
     return {
         "claude": "Claude",
         "codex": "Codex",
+        "minimax": "MiniMax",
         "opencode_go": "OpenCode",
         "antigravity": "Antigravity",
     }.get(kind, kind.title())
@@ -419,7 +424,7 @@ def browser_accounts(
     accounts = [
         account
         for account in getattr(config, "browser_accounts", [])
-        if account.kind in ("claude", "codex", "opencode_go")
+        if account.kind in ("claude", "codex", "minimax", "opencode_go")
     ]
     if kind is not None:
         accounts = [account for account in accounts if account.kind == kind]
@@ -439,12 +444,14 @@ def account_kind(config: Config, account_id: str) -> str | None:
     account = browser_account(config, account_id)
     if account is not None:
         return account.kind
-    if account_id in ("claude", "codex"):
+    if account_id in ("claude", "codex", "minimax"):
         return account_id
     if account_id.startswith("claude-"):
         return "claude"
     if account_id.startswith("codex-"):
         return "codex"
+    if account_id.startswith("minimax-"):
+        return "minimax"
     if account_id == "opencode_go" or account_id.startswith("opencode_go-"):
         return "opencode_go"
     return None
@@ -457,6 +464,7 @@ def display_name_for_account(config: Config, account_id: str) -> str:
     return {
         "claude": "Claude",
         "codex": "Codex",
+        "minimax": "MiniMax",
         "copilot": "Copilot",
         "openrouter": "OpenRouter",
         "antigravity": "Antigravity",

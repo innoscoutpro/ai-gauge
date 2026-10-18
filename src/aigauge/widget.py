@@ -117,6 +117,8 @@ def _provider_family(provider: str) -> str:
         return "claude"
     if provider == "codex" or provider.startswith("codex-"):
         return "codex"
+    if provider == "minimax" or provider.startswith("minimax-"):
+        return "minimax"
     if provider == "opencode_go" or provider.startswith("opencode_go-"):
         return "opencode_go"
     return provider
@@ -1266,7 +1268,8 @@ class _ProviderTile(QFrame):
             self.status.setToolTip(snapshot.error or "")
             self.status.setCursor(Qt.CursorShape.ArrowCursor)
             self.action_btn.setVisible(
-                _provider_family(self.provider) in ("claude", "codex", "opencode_go")
+                _provider_family(self.provider)
+                in ("claude", "codex", "minimax", "opencode_go")
             )
             self.action_btn.setText("Add key" if is_opencode else "Sign in")
             self.expand_btn.setVisible(False)
@@ -1902,7 +1905,7 @@ class UsageWidget(QWidget):
         accounts = [
             account
             for account in getattr(self._config, "browser_accounts", [])
-            if account.kind in ("claude", "codex", "opencode_go")
+            if account.kind in ("claude", "codex", "minimax", "opencode_go")
         ]
         account_ids = [account.id for account in accounts]
         order = provider_order(self._config)

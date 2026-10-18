@@ -381,6 +381,41 @@ def test_build_providers_creates_one_provider_per_opencode_account(monkeypatch):
     ]
 
 
+def test_build_providers_creates_minimax_tile_when_enabled(monkeypatch):
+    config = Config(browser_accounts=[BrowserAccount(id="minimax", kind="minimax")])
+    config.providers.claude = False
+    config.providers.codex = False
+    config.providers.copilot = False
+    config.providers.openrouter = False
+    config.providers.antigravity = False
+    config.providers.minimax = True
+    created = []
+    ensured = []
+
+    monkeypatch.setattr(
+        app_module,
+        "MiniMaxProvider",
+        lambda parent=None, account_id="minimax": created.append(account_id) or object(),
+        raising=False,
+    )
+    app = App.__new__(App)
+    app._config = config  # noqa: SLF001
+    app._providers = {}  # noqa: SLF001
+    app._snapshots = {}  # noqa: SLF001
+    app._widget = SimpleNamespace(  # noqa: SLF001
+        _tiles={},
+        ensure_tile=lambda account_id, name: ensured.append((account_id, name)),
+        remove_tile=lambda account_id: None,
+        apply_provider_order=lambda: None,
+    )
+
+    app._build_providers()  # noqa: SLF001
+
+    assert created == ["minimax"]
+    assert ensured == [("minimax", "MiniMax")]
+    assert list(app._providers) == ["minimax"]  # noqa: SLF001
+
+
 def test_build_providers_passes_per_account_fable_toggle(monkeypatch):
     config = Config(
         browser_accounts=[

@@ -42,6 +42,7 @@ from .platforms import autostart_command, get_platform
 from .providers.base import Provider, ProviderSignals
 from .providers.claude import ClaudeProvider
 from .providers.codex import CodexProvider
+from .providers.minimax import MINIMAX_USAGE_URL, MiniMaxProvider
 from .providers.copilot import CopilotProvider
 from .providers.openrouter import OpenRouterProvider
 from .providers.antigravity import AntigravityProvider
@@ -74,6 +75,7 @@ log = logging.getLogger("aigauge.app")
 LOGIN_URLS = {
     "claude": ("https://claude.ai/login", "Sign in to Claude"),
     "codex": ("https://chatgpt.com/auth/login", "Sign in to ChatGPT"),
+    "minimax": (MINIMAX_USAGE_URL, "Sign in to MiniMax"),
 }
 
 _ACTIVE_MODE_MINUTES = 30
@@ -458,6 +460,11 @@ class App(QObject):
                 )
             elif account.kind == "codex":
                 self._providers[account.id] = CodexProvider(
+                    parent=self,
+                    account_id=account.id,
+                )
+            elif account.kind == "minimax":
+                self._providers[account.id] = MiniMaxProvider(
                     parent=self,
                     account_id=account.id,
                 )
@@ -926,7 +933,7 @@ class App(QObject):
         kind = draft.kind if draft is not None else account_kind(self._config, provider)
         if kind is None:
             return
-        if kind == "opencode_go":
+        if kind in ("opencode_go", "minimax"):
             return
         display_name = (
             account_display_name(draft)
