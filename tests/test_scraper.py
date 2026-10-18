@@ -1,7 +1,9 @@
 from typing import Any, cast
 
 from aigauge.webview.scraper import HeadlessScraper
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import Qt, QUrl
+from aigauge.webview import scraper as scraper_module
+import pytest
 
 
 class _LoginPage:
@@ -55,3 +57,29 @@ def test_failed_load_on_other_page_remains_transport_failure():
 
 def test_extractor_retry_limit_is_retryable_transport_error():
     assert "extractor retry limit exceeded" in HeadlessScraper._RETRYABLE_ERRORS
+
+
+@pytest.mark.parametrize("provider", ["minimax", "minimax-team"])
+def test_minimax_scrape_is_visible_to_site_without_desktop_window(provider):
+    actions = []
+
+    class View:
+        def setAttribute(self, attr, value):
+            actions.append((attr, value))
+
+        def show(self):
+            actions.append("show")
+
+    scraper_module._prepare_provider_view(provider, View())
+    assert actions == [(Qt.WidgetAttribute.WA_DontShowOnScreen, True), "show"]
+
+
+def test_other_provider_scrapes_keep_their_existing_hidden_view():
+    class View:
+        def setAttribute(self, attr, value):
+            raise AssertionError("ordinary providers must remain unchanged")
+
+        def show(self):
+            raise AssertionError("ordinary providers must remain unchanged")
+
+    scraper_module._prepare_provider_view("codex", View())

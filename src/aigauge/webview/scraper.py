@@ -6,7 +6,7 @@ import time
 from typing import Any, Callable
 from urllib.parse import urlparse, urlunparse
 
-from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from .page import QuietWebEnginePage
@@ -63,6 +63,15 @@ def _claude_auth_redirect(
     return {"logged_out": True, "url": url}
 
 
+def _prepare_provider_view(provider: str, view: QWebEngineView) -> None:
+    # MiniMax's usage card stays at the initial 0% while Chromium considers
+    # its page hidden. Mark the QWidget visible to the site without placing a
+    # window on the desktop. Other providers retain the original behavior.
+    if provider == "minimax" or provider.startswith("minimax-"):
+        view.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        view.show()
+
+
 class HeadlessScraper(QObject):
     """Load a page in an offscreen QWebEngineView, then evaluate JS to extract data.
 
@@ -116,8 +125,9 @@ class HeadlessScraper(QObject):
         self._page = QuietWebEnginePage(profile, self, provider=provider)
         self._view = QWebEngineView()
         self._view.setPage(self._page)
-        # Offscreen — never .show()
+        # Offscreen; MiniMax is visible to Chromium but not to the desktop.
         self._view.resize(1280, 900)
+        _prepare_provider_view(provider, self._view)
 
         self._timeout = QTimer(self)
         self._timeout.setSingleShot(True)
