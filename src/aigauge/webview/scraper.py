@@ -6,7 +6,7 @@ import time
 from typing import Any, Callable
 from urllib.parse import urlparse, urlunparse
 
-from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from .page import QuietWebEnginePage
@@ -63,6 +63,13 @@ def _claude_auth_redirect(
     return {"logged_out": True, "url": url}
 
 
+def _prepare_provider_view(view: QWebEngineView, provider: str) -> None:
+    """Make MiniMax pages visible to Chromium without displaying a desktop window."""
+    if provider == "minimax" or provider.startswith("minimax-"):
+        view.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        view.show()
+
+
 class HeadlessScraper(QObject):
     """Load a page in an offscreen QWebEngineView, then evaluate JS to extract data.
 
@@ -116,7 +123,7 @@ class HeadlessScraper(QObject):
         self._page = QuietWebEnginePage(profile, self, provider=provider)
         self._view = QWebEngineView()
         self._view.setPage(self._page)
-        # Offscreen — never .show()
+        _prepare_provider_view(self._view, provider)
         self._view.resize(1280, 900)
 
         self._timeout = QTimer(self)

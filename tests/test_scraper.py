@@ -1,7 +1,7 @@
 from typing import Any, cast
 
-from aigauge.webview.scraper import HeadlessScraper
-from PyQt6.QtCore import QUrl
+from aigauge.webview.scraper import HeadlessScraper, _prepare_provider_view
+from PyQt6.QtCore import QUrl, Qt
 
 
 class _LoginPage:
@@ -55,3 +55,42 @@ def test_failed_load_on_other_page_remains_transport_failure():
 
 def test_extractor_retry_limit_is_retryable_transport_error():
     assert "extractor retry limit exceeded" in HeadlessScraper._RETRYABLE_ERRORS
+
+
+class _View:
+    def __init__(self):
+        self.attributes: list[tuple[object, bool]] = []
+        self.shown = False
+
+    def setAttribute(self, attribute, enabled):
+        self.attributes.append((attribute, enabled))
+
+    def show(self):
+        self.shown = True
+
+
+def test_minimax_provider_view_is_visible_to_chromium_without_being_shown_on_desktop():
+    view = _View()
+
+    _prepare_provider_view(cast(Any, view), "minimax")
+
+    assert view.attributes == [(Qt.WidgetAttribute.WA_DontShowOnScreen, True)]
+    assert view.shown is True
+
+
+def test_minimax_team_provider_view_is_visible_to_chromium_without_being_shown_on_desktop():
+    view = _View()
+
+    _prepare_provider_view(cast(Any, view), "minimax-team")
+
+    assert view.attributes == [(Qt.WidgetAttribute.WA_DontShowOnScreen, True)]
+    assert view.shown is True
+
+
+def test_other_provider_views_remain_hidden():
+    view = _View()
+
+    _prepare_provider_view(cast(Any, view), "claude")
+
+    assert view.attributes == []
+    assert view.shown is False
