@@ -14,9 +14,10 @@
 </p>
 
 AI Gauge is a compact desktop monitor for **Claude.ai**, **ChatGPT Codex**,
-**OpenCode Go**, **GitHub Copilot**, and **OpenRouter**. It shows usage limits,
-reset times, balances, and spend at a glance. Optional local tracking estimates
-the API-equivalent cost of Claude Code and Codex activity on this computer.
+**MiniMax Coding Plan**, **OpenCode Go**, **GitHub Copilot**, and **OpenRouter**.
+It shows usage limits, reset times, balances, and spend at a glance. Optional
+local tracking estimates the API-equivalent cost of Claude Code and Codex
+activity on this computer.
 
 - **Windows / Linux** — always-on-top draggable frameless widget plus a system-tray icon.
 - **macOS** — Stats-style menu-bar item (`● Cl 42% ● Cx 78% ● Co 15%`); the panel opens as a popover when you click it.
@@ -76,7 +77,7 @@ python3 -m venv .venv
 ./.venv/bin/python -m aigauge
 ```
 
-On first launch the widget appears with enabled provider tiles. Claude and Codex use a **Sign in** or **Paste cookie** flow; OpenCode Go, GitHub Copilot, and OpenRouter are configured from Settings with API credentials. Open Settings to disable providers you don't use or to add more Claude, Codex, or OpenCode Go accounts.
+On first launch the widget appears with enabled provider tiles. Claude and Codex use a **Sign in** or **Paste cookie** flow; MiniMax uses **Sign in**; OpenCode Go, GitHub Copilot, and OpenRouter are configured from Settings with API credentials. Open Settings to enable MiniMax, disable providers you don't use, or add more Claude, Codex, MiniMax, or OpenCode Go accounts.
 
 ## First-time setup per provider
 
@@ -84,20 +85,21 @@ On first launch the widget appears with enabled provider tiles. Claude and Codex
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Claude.ai**      | **Sign in (recommended):** asks which installed Chrome-family browser to use, remembers that choice, supports Google and passkeys, and connects the resulting Claude session automatically. No cookie copying is required. **Paste cookie:** remains available as a recovery fallback. Add extra Claude subscriptions from **Settings → Claude**. |
 | **ChatGPT Codex**  | Same as Claude — **Sign in** uses your chosen installed browser and automatically connects the ChatGPT session, including Google-linked and passkey accounts. **Paste cookie** remains available only as a fallback. Add extra Codex subscriptions from **Settings → Codex**. |
+| **MiniMax Coding Plan** | Off by default: enable **MiniMax** in **Settings → General**, then open **Settings → MiniMax** and choose **Sign in**. AI Gauge opens the selected Chrome-family browser in a temporary profile; after the signed-in `platform.minimax.io/console/usage` page is visible, it copies only `minimax.io` cookies into that MiniMax account's persistent embedded-browser profile. It shows the Coding Plan 5-hour limit and its unlimited weekly row; API credit balance and usage history are not tracked. |
 | **OpenCode Go**    | Sign in at <https://opencode.ai/auth> and copy an API key. In **Settings → OpenCode**, paste the key beside the subscription name. Each subscription has an independent key and tile. AI Gauge stores keys in the system credential store and reads Rolling, Weekly, and Monthly usage from the authenticated Go API. The shorter name **OpenCode** is used in the app. |
 | **GitHub Copilot** | Create a **fine-grained PAT** at <https://github.com/settings/personal-access-tokens/new>. For personal plans, add **Account permissions → Plan → Read**. Paste into Settings; set your monthly AI credit allowance (Pro=1,500, Pro+=7,000, Max=20,000). If Copilot is billed through an organization, enter the billing org and use a token/account with org billing access and **Organization permissions → Administration → Read**. |
 | **OpenRouter**     | Create an inference API key at <https://openrouter.ai/keys> and paste it into Settings. To show account balance and model activity, also create a management key at <https://openrouter.ai/settings/provisioning-keys>. Management keys cannot be used for inference; AI Gauge stores it separately and only uses it for OpenRouter management endpoints. Daily spend budget is optional.                                                    |
 | **Antigravity**    | Off by default: enable **Antigravity** in **Settings → General**. AI Gauge runs Google's local `agy` CLI (`agy --print /quota`) on each refresh and shows the quota it reports. No account or API key is entered in AI Gauge; it shows whatever your installed `agy` returns. Leave **agy CLI** empty in **Settings → Antigravity** to auto-detect it (`agy` on `PATH`, then `%LOCALAPPDATA%\agy\bin\agy.exe` on Windows), or set the path. The tile shows Gemini and Claude+GPT quotas, with a 5-hour and a weekly row where the plan has them; choose which groups to show on the Antigravity page. |
 
-### Multiple Claude / Codex / OpenCode Go accounts
+### Multiple Claude / Codex / MiniMax / OpenCode Go accounts
 
-Claude, Codex, and OpenCode Go can track more than one subscription at a time. Open the provider's page in Settings, click **Add another**, and give the account a short name. Use **Sign in** or **Paste cookie** for each Claude or Codex row; paste the matching API key into each OpenCode row. Default accounts display as `Claude`, `Codex`, or `OpenCode`; named accounts display as `Claude (Work)`, `Codex (Account 2)`, `OpenCode (Team)`, etc. Claude and Codex accounts keep separate browser sessions, while OpenCode accounts keep separate system-keychain entries.
+Claude, Codex, MiniMax, and OpenCode Go can track more than one subscription at a time. Open the provider's page in Settings, click **Add another**, and give the account a short name. Use **Sign in** or **Paste cookie** for each Claude or Codex row, **Sign in** for each MiniMax row, and paste the matching API key into each OpenCode row. Default accounts display as `Claude`, `Codex`, `MiniMax`, or `OpenCode`; named accounts display as `Claude (Work)`, `Codex (Account 2)`, `MiniMax (Team)`, `OpenCode (Team)`, etc. Browser-based accounts keep separate browser sessions, while OpenCode accounts keep separate system-keychain entries.
 
-The **General** page controls provider groups. Enabling Claude, Codex, or OpenCode shows every configured account in that family. Any account can be removed from its provider page, including the original account; the **Add another** button remains available when no accounts are configured. Every account has separate credentials, widget tile state, and history records.
+The **General** page controls provider groups. Enabling Claude, Codex, MiniMax, or OpenCode shows every configured account in that family. Any account can be removed from its provider page, including the original account; the **Add another** button remains available when no accounts are configured. Every account has separate credentials, widget tile state, and history records.
 
 Use **Clear sign-in** beside an account to remove its session from AI Gauge.
-This clears both the OS-protected saved cookie and the account's live embedded
-browser cookies. It does not revoke sessions in other browsers or devices; use
+This clears the account's live embedded-browser cookies and any protected saved
+cookie fallback. It does not revoke sessions in other browsers or devices; use
 the provider's security settings when you need to sign out everywhere.
 
 ### Optional local usage and cost
@@ -124,10 +126,12 @@ General → Sign-in browser**. The flow is local:
    passkey.
 3. AI Gauge watches the temporary browser through a random loopback-only
    debugging port and accepts cookies only for the selected provider:
-   `claude.ai` or `chatgpt.com`.
+   `claude.ai`, `chatgpt.com`, or `minimax.io`.
 4. The provider session is copied into that AI Gauge account's persistent
-   browser profile and OS-protected secret storage. Google cookies and cookies
-   for unrelated sites are ignored.
+   browser profile. Claude and Codex also keep a protected cookie fallback;
+   MiniMax keeps its session only in the persistent browser profile because it
+   has no stable auth-cookie name. Google cookies and cookies for unrelated
+   sites are ignored.
 5. AI Gauge closes the temporary browser, deletes its temporary profile, and
    verifies that the provider's usage page is signed in.
 

@@ -94,3 +94,68 @@ def test_other_provider_views_remain_hidden():
 
     assert view.attributes == []
     assert view.shown is False
+
+
+def test_minimax_view_is_prepared_after_its_viewport_is_sized(monkeypatch):
+    events = []
+
+    class Signal:
+        def connect(self, callback):
+            return None
+
+    class Page:
+        loadFinished = Signal()
+        loadProgress = Signal()
+        urlChanged = Signal()
+        renderProcessTerminated = Signal()
+        loadingChanged = Signal()
+
+    class View:
+        def setPage(self, page):  # noqa: N802 - Qt-shaped test double
+            events.append("set_page")
+
+        def resize(self, width, height):
+            events.append(("resize", width, height))
+
+        def width(self):
+            return 1280
+
+        def height(self):
+            return 900
+
+    class Timer:
+        timeout = Signal()
+
+        def __init__(self, parent):
+            return None
+
+        def setSingleShot(self, value):  # noqa: N802 - Qt-shaped test double
+            return None
+
+    class Profile:
+        def persistentStoragePath(self):  # noqa: N802 - Qt-shaped test double
+            return "profile"
+
+        def httpUserAgent(self):  # noqa: N802 - Qt-shaped test double
+            return "agent"
+
+    import aigauge.webview.scraper as scraper
+
+    monkeypatch.setattr(scraper, "get_profile", lambda provider: Profile())
+    monkeypatch.setattr(scraper, "QuietWebEnginePage", lambda *args, **kwargs: Page())
+    monkeypatch.setattr(scraper, "QWebEngineView", View)
+    monkeypatch.setattr(scraper, "QTimer", Timer)
+    monkeypatch.setattr(
+        scraper,
+        "_prepare_provider_view",
+        lambda view, provider: events.append(("prepare", provider)),
+    )
+    monkeypatch.setattr(HeadlessScraper, "_begin_attempt", lambda self: None)
+
+    HeadlessScraper("minimax", "https://platform.minimax.io/console/usage", "")
+
+    assert events == [
+        "set_page",
+        ("resize", 1280, 900),
+        ("prepare", "minimax"),
+    ]

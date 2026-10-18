@@ -51,3 +51,14 @@ def test_extractor_keeps_only_my_usage_and_reads_live_fixture_percent(tmp_path):
     assert snapshot.status == SnapshotStatus.OK
     assert snapshot.metrics[0].percent_used == 19.0
     assert snapshot.raw == {"url": MINIMAX_USAGE_URL, "logged_out": False}
+
+
+def test_extractor_drops_usage_text_when_credit_balance_boundary_is_missing(tmp_path):
+    payload = _extract(
+        tmp_path,
+        url=MINIMAX_USAGE_URL,
+        body="My usage 5h limit Resets in 1 hr Total quota 100% Used 19% Weekly limit Unlimited private-data",
+    )
+
+    assert payload["usage_text"] == ""
+    assert _build_snapshot(payload).status == SnapshotStatus.ERROR

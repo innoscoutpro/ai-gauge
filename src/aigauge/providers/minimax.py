@@ -24,7 +24,7 @@ EXTRACTOR_JS = r"""
     .replace(/\s+/g, ' ').trim();
   const start = text.search(/\bMy usage\b/i);
   const end = start < 0 ? -1 : text.slice(start).search(/\bCredit balance\b/i);
-  const usageText = start < 0 ? '' : text.slice(start, end < 0 ? undefined : start + end);
+  const usageText = start < 0 || end < 0 ? '' : text.slice(start, start + end);
   const path = location.pathname.toLowerCase();
   return {
     url: location.href.split('?')[0].split('#')[0],

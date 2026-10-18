@@ -236,7 +236,7 @@ class Config(BaseModel):
             ),
         ]
     )
-    browser_accounts_version: int = 2
+    browser_accounts_version: int = 3
     copilot: CopilotConfig = Field(default_factory=CopilotConfig)
     openrouter: OpenRouterConfig = Field(default_factory=OpenRouterConfig)
     antigravity: AntigravityConfig = Field(default_factory=AntigravityConfig)
@@ -330,6 +330,23 @@ class Config(BaseModel):
                     account["colors"] = colors
                 accounts.append(account)
             data["browser_accounts_version"] = 2
+            accounts_version = 2
+        if accounts_version < 3:
+            accounts = data.get("browser_accounts")
+            if isinstance(accounts, list) and not any(
+                item.get("kind") == "minimax"
+                for item in accounts
+                if isinstance(item, dict)
+            ):
+                accounts.append(
+                    {
+                        "id": "minimax",
+                        "kind": "minimax",
+                        "name": None,
+                        "enabled": True,
+                    }
+                )
+            data["browser_accounts_version"] = 3
         window = data.get("window")
         if isinstance(window, dict):
             width = window.get("width")

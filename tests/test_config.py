@@ -244,6 +244,7 @@ def test_load_migrates_old_refresh_interval_to_active_rate():
         ("claude", "claude", True),
         ("codex", "codex", True),
         ("opencode_go", "opencode_go", True),
+        ("minimax", "minimax", True),
     ]
 
 
@@ -272,6 +273,7 @@ def test_load_migrates_legacy_provider_toggles_to_browser_accounts():
         ("claude", "claude", False),
         ("codex", "codex", True),
         ("opencode_go", "opencode_go", True),
+        ("minimax", "minimax", True),
     ]
 
 
@@ -289,7 +291,7 @@ def test_upgraded_config_without_fable_key_shows_the_limit():
 
     c = Config.load()
 
-    assert [a.show_fable for a in c.browser_accounts] == [True, True]
+    assert [a.show_fable for a in c.browser_accounts] == [True, True, True]
 
 
 def test_explicitly_disabled_fable_account_stays_disabled():
@@ -305,7 +307,7 @@ def test_explicitly_disabled_fable_account_stays_disabled():
 
     c = Config.load()
 
-    assert [a.show_fable for a in c.browser_accounts] == [False, True]
+    assert [a.show_fable for a in c.browser_accounts] == [False, True, True]
 
 
 def test_load_adds_opencode_without_restoring_removed_claude_or_codex():
@@ -315,11 +317,12 @@ def test_load_adds_opencode_without_restoring_removed_claude_or_codex():
     c = Config.load()
 
     assert [(a.id, a.kind) for a in c.browser_accounts] == [
-        ("opencode_go", "opencode_go")
+        ("opencode_go", "opencode_go"),
+        ("minimax", "minimax"),
     ]
 
 
-def test_load_preserves_explicitly_removed_accounts_after_v2_migration():
+def test_v2_config_gains_minimax_without_restoring_removed_accounts():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
         '{"browser_accounts": [], "browser_accounts_version": 2}',
@@ -328,7 +331,38 @@ def test_load_preserves_explicitly_removed_accounts_after_v2_migration():
 
     c = Config.load()
 
+    assert [(account.id, account.kind) for account in c.browser_accounts] == [
+        ("minimax", "minimax")
+    ]
+    assert c.browser_accounts_version == 3
+
+
+def test_v3_config_preserves_explicitly_removed_minimax_account():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts": [], "browser_accounts_version": 3}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
     assert c.browser_accounts == []
+
+
+def test_v2_config_adds_minimax_without_restoring_other_removed_accounts():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts": [{"id": "claude", "kind": "claude"}], '
+        '"browser_accounts_version": 2}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert [(account.id, account.kind) for account in c.browser_accounts] == [
+        ("claude", "claude"),
+        ("minimax", "minimax"),
+    ]
 
 
 def test_load_migrates_single_opencode_colors_to_account():
@@ -345,7 +379,7 @@ def test_load_migrates_single_opencode_colors_to_account():
 
     assert account is not None
     assert account.colors.green_max == 20
-    assert c.browser_accounts_version == 2
+    assert c.browser_accounts_version == 3
 
 
 def test_browser_account_display_names():

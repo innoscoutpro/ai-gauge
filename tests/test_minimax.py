@@ -42,6 +42,36 @@ def test_credit_or_usage_history_text_is_not_treated_as_a_plan_limit():
     assert snapshot.raw == {"url": MINIMAX_USAGE_URL, "logged_out": False}
 
 
+def test_zero_percent_5h_limit_is_valid():
+    snapshot = _build_snapshot(
+        {
+            "url": MINIMAX_USAGE_URL,
+            "usage_text": (
+                "My usage 5h limit Resets in 1 hr Total quota 100% "
+                "Used 0% Weekly limit Unlimited"
+            ),
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert snapshot.metrics[0].percent_used == 0.0
+
+
+def test_out_of_range_5h_percent_is_rejected():
+    snapshot = _build_snapshot(
+        {
+            "url": MINIMAX_USAGE_URL,
+            "usage_text": (
+                "My usage 5h limit Resets in 1 hr Total quota 100% "
+                "Used 101% Weekly limit Unlimited"
+            ),
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert snapshot.error == "MiniMax returned an invalid 5-hour limit or reset time."
+
+
 def test_logged_out_minimax_page_requests_sign_in():
     snapshot = _build_snapshot(
         {

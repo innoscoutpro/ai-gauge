@@ -123,8 +123,8 @@ class HeadlessScraper(QObject):
         self._page = QuietWebEnginePage(profile, self, provider=provider)
         self._view = QWebEngineView()
         self._view.setPage(self._page)
-        _prepare_provider_view(self._view, provider)
         self._view.resize(1280, 900)
+        _prepare_provider_view(self._view, provider)
 
         self._timeout = QTimer(self)
         self._timeout.setSingleShot(True)

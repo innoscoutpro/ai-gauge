@@ -157,6 +157,38 @@ def test_import_browser_cookies_preserves_attributes_and_saves_fallback(monkeypa
     ]
 
 
+def test_import_browser_cookies_keeps_minimax_session_in_persistent_profile_only(monkeypatch):
+    imported = []
+    saved = []
+
+    class FakeStore:
+        def deleteAllCookies(self):  # noqa: N802 - Qt-shaped test double
+            return None
+
+        def setCookie(self, cookie, origin):  # noqa: N802 - Qt-shaped test double
+            imported.append((cookie, origin))
+
+    class FakeProfile:
+        def cookieStore(self):  # noqa: N802 - Qt-shaped test double
+            return FakeStore()
+
+    monkeypatch.setattr(cookies, "get_profile", lambda account_id: FakeProfile())
+    monkeypatch.setattr(
+        cookies,
+        "set_provider_cookie",
+        lambda account_id, value: saved.append((account_id, value)),
+    )
+
+    assert cookies.import_browser_cookies(
+        "minimax",
+        "minimax",
+        [{"name": "session", "value": "secret", "domain": ".minimax.io"}],
+    )
+
+    assert len(imported) == 1
+    assert saved == []
+
+
 def test_clear_browser_session_removes_secret_cookies_and_cache(monkeypatch):
     calls = []
 

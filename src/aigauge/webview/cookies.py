@@ -253,10 +253,14 @@ def import_browser_cookies(
         origin = QUrl(f"https://{cookie_domain.lstrip('.')}/")
         store.setCookie(cookie, origin)
 
-    # Keep the same encrypted fallback used by the paste-cookie flow. Values
-    # are never logged; only cookie names appear in diagnostics.
-    header = "; ".join(f"{item['name']}={item['value']}" for item in matching)
-    set_provider_cookie(account_id, header)
+    # MiniMax has no stable auth-cookie name, so its full browser header cannot
+    # be hydrated safely on restart. Its ForcePersistentCookies profile keeps
+    # the live session without duplicating that header in secret storage.
+    if provider != "minimax":
+        # Keep the same encrypted fallback used by the paste-cookie flow.
+        # Values are never logged; only cookie names appear in diagnostics.
+        header = "; ".join(f"{item['name']}={item['value']}" for item in matching)
+        set_provider_cookie(account_id, header)
     log.info(
         "browser cookies imported provider=%s cookie_names=%s",
         account_id,
